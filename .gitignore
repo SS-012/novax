@@ -1,0 +1,22 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+env/
+
+# OS / IDE files
+.DS_Store
+.vscode/
+.novax/
+.idea/
+
+# Colab / Jupyter
+*.ipynb_checkpoints/
+
+# Pytest cache
+.pytest_cache/
