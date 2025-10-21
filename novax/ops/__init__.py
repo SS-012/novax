@@ -1,8 +1,6 @@
-from novax.core import GPU_AVAILABLE
+"""
+Ops package. Submodules: novax.ops.gpu, novax.ops.cpu
+Avoid importing novax.core here to prevent circular imports.
+"""
 
-if GPU_AVAILABLE:
-    from .gpu import *
-else:
-    from .cpu import *
-
-__all__ = ["add", "sub", "mul", "div"]
+__all__ = ["gpu", "cpu"]
