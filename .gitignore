@@ -9,6 +9,11 @@ dist/
 .venv/
 env/
 
+# Hatch / Build artifacts
+*.egg-info/
+.eggs/
+.hatch_cache/
+
 # OS / IDE files
 .DS_Store
 .vscode/
