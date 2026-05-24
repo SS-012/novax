@@ -31,6 +31,8 @@ classifiers = [
 gpu = [
   "pycuda>=2024.1",
   "cuda-python>=12.0",
+  "scikit-cuda>=0.5.3",
+  "triton>=2.0",
 ]
 dev = [
   "pytest>=7.0",

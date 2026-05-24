@@ -17,6 +17,8 @@ try:
 except ImportError:
     nvrtc = None
 
+_DEFAULT_DTYPE = np.float32   # overridden by nx.set_dtype()
+
 _UNARY_ELEMENTWISE = frozenset({"exp", "log", "sqrt", "abs", "neg", "relu", "sigmoid", "tanh", "softmax"})
 _REDUCE_OPS = frozenset({"sum", "mean", "max", "min"})
 _BINARY_OPS = frozenset({"add", "sub", "mul", "div", "pow"})
@@ -52,11 +54,15 @@ _UNARY_NUMPY = {
 class Tensor:
     """NovaX tensor: CPU/GPU backed, lazy evaluation, autograd support."""
 
-    def __init__(self, data, op=None, inputs=None, gpu=False, requires_grad=False):
+    def __init__(self, data, op=None, inputs=None, gpu=False, requires_grad=False,
+                 dtype=None):
         self.requires_grad = requires_grad
         self.grad = None
         self._backward = lambda: None
         self._prev: set = set()
+
+        # Resolve dtype: explicit arg > _DEFAULT_DTYPE
+        _dtype = dtype if dtype is not None else _DEFAULT_DTYPE
 
         # --- scalar / constant ---
         self.is_constant = False
@@ -66,7 +72,7 @@ class Tensor:
             self.const_value = float(data)
             self.shape = (1,)
             self.size = 1
-            self.dtype = np.float32
+            self.dtype = np.float32   # scalars always float32
             self.data = np.array([data], dtype=np.float32)
             self.gpu_ptr = None
             self.on_gpu = False
@@ -88,7 +94,7 @@ class Tensor:
             self.data = None
             if self.inputs:
                 self.shape = self.inputs[0].shape
-                self.dtype = self.inputs[0].dtype
+                self.dtype = getattr(self.inputs[0], 'dtype', np.float32)
                 self.size = self.inputs[0].size
             else:
                 self.shape = getattr(data, "shape", None)
@@ -102,19 +108,19 @@ class Tensor:
             self.data = None
             if self.inputs:
                 self.shape = self.inputs[0].shape
-                self.dtype = self.inputs[0].dtype
+                self.dtype = getattr(self.inputs[0], 'dtype', _dtype)
                 self.size = self.inputs[0].size
             else:
                 self.shape = None
-                self.dtype = None
+                self.dtype = _dtype
                 self.size = None
         else:
             if isinstance(data, (list, tuple)):
-                self.data = np.array(data, dtype=np.float32)
+                self.data = np.array(data, dtype=_dtype)
             elif isinstance(data, np.ndarray):
-                self.data = data.astype(np.float32)
+                self.data = data.astype(_dtype)
             else:
-                self.data = np.array(data, dtype=np.float32)
+                self.data = np.array(data, dtype=_dtype)
             self.shape = self.data.shape
             self.dtype = self.data.dtype
             self.size = self.data.size
@@ -216,6 +222,57 @@ class Tensor:
         return Tensor(np.transpose(arr, axes))
 
     # ------------------------------------------------------------------
+    # Item 6: fp16 dtype support
+    # ------------------------------------------------------------------
+
+    def half(self):
+        """Return a copy of this tensor in float16 (half precision)."""
+        arr = self.to_host() if self.on_gpu else self.data
+        if arr is None:
+            raise ValueError("Cannot convert a tensor without data to fp16")
+        return Tensor(arr.astype(np.float16), dtype=np.float16)
+
+    def float(self):
+        """Return a copy of this tensor in float32."""
+        arr = self.to_host() if self.on_gpu else self.data
+        if arr is None:
+            raise ValueError("Cannot convert a tensor without data to fp32")
+        return Tensor(arr.astype(np.float32), dtype=np.float32)
+
+    # ------------------------------------------------------------------
+    # Item 8: pattern matching helpers for auto-fusion
+    # ------------------------------------------------------------------
+
+    def _match_matmul_bias_relu(self):
+        """
+        Returns (A, B, bias) if this lazy node matches relu(matmul(A,B)+bias),
+        otherwise None.  Used by eval() to auto-dispatch to the fused kernel.
+        """
+        if self.op != "relu" or len(self.inputs) != 1:
+            return None
+        add_node = self.inputs[0]
+        if not hasattr(add_node, 'op') or add_node.op != "add" or len(add_node.inputs) != 2:
+            return None
+        mm_node = add_node.inputs[0]
+        bias_node = add_node.inputs[1]
+        if not hasattr(mm_node, 'op') or mm_node.op != "matmul" or len(mm_node.inputs) != 2:
+            return None
+        return mm_node.inputs[0], mm_node.inputs[1], bias_node
+
+    def _match_matmul_bias(self):
+        """
+        Returns (A, B, bias) if this lazy node matches matmul(A,B)+bias,
+        otherwise None.
+        """
+        if self.op != "add" or len(self.inputs) != 2:
+            return None
+        mm_node = self.inputs[0]
+        bias_node = self.inputs[1]
+        if not hasattr(mm_node, 'op') or mm_node.op != "matmul" or len(mm_node.inputs) != 2:
+            return None
+        return mm_node.inputs[0], mm_node.inputs[1], bias_node
+
+    # ------------------------------------------------------------------
     # Evaluation / JIT compilation
     # ------------------------------------------------------------------
 
@@ -225,6 +282,24 @@ class Tensor:
 
         if self.is_leaf:
             return self
+
+        # Item 8: pattern-match fused kernels before per-op dispatch
+        if GPU_AVAILABLE:
+            match = self._match_matmul_bias_relu()
+            if match is not None:
+                A, B, bias = match
+                A_e = A.eval(); B_e = B.eval(); bias_e = bias.eval()
+                if A_e.on_gpu and B_e.on_gpu and bias_e.on_gpu:
+                    from novax.ops.launcher import launch_matmul_bias_relu
+                    return launch_matmul_bias_relu(A_e, B_e, bias_e)
+
+            match = self._match_matmul_bias()
+            if match is not None:
+                A, B, bias = match
+                A_e = A.eval(); B_e = B.eval(); bias_e = bias.eval()
+                if A_e.on_gpu and B_e.on_gpu and bias_e.on_gpu:
+                    from novax.ops.launcher import launch_matmul_bias
+                    return launch_matmul_bias(A_e, B_e, bias_e)
 
         if self.op in _UNARY_ELEMENTWISE or self.op in _REDUCE_OPS:
             inp = self.inputs[0].eval()

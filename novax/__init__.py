@@ -20,7 +20,7 @@ from .dispatch import (
     sum, mean, max, min,
 )
 from .autograd import no_grad
-from .ops.launcher import launch_matmul_bias_relu
+from .ops.launcher import launch_matmul_bias_relu, launch_matmul_bias, CUDAGraph
 
 
 def set_default_device(device: str):
@@ -28,3 +28,21 @@ def set_default_device(device: str):
     from novax import dispatch
     dispatch.DEFAULT_DEVICE = device.lower()
     print(f"[NovaX] Default device set to: {dispatch.DEFAULT_DEVICE.upper()}")
+
+
+def set_dtype(dtype: str):
+    """
+    Set the default tensor dtype for all subsequently created Tensors.
+
+    Parameters
+    ----------
+    dtype : str
+        ``'float32'`` (default) or ``'float16'`` / ``'fp16'`` / ``'half'``.
+    """
+    import numpy as np
+    import novax.core as _core
+    if dtype in ("float16", "fp16", "half"):
+        _core._DEFAULT_DTYPE = np.float16
+    else:
+        _core._DEFAULT_DTYPE = np.float32
+    print(f"[NovaX] Default dtype set to: {_core._DEFAULT_DTYPE}")
