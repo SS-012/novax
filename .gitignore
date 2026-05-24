@@ -25,3 +25,6 @@ env/
 
 # Pytest cache
 .pytest_cache/
+
+# MkDocs build output (deployed to gh-pages branch, not committed to source)
+site/
