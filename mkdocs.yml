@@ -1,0 +1,87 @@
+site_name: NovaX
+site_description: GPU-accelerated math library for Python — fast tensors, activations, matmul, and autograd
+site_url: https://ss-012.github.io/novax
+repo_name: SS-012/novax
+repo_url: https://github.com/SS-012/novax
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  font:
+    text: Inter
+    code: JetBrains Mono
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.arithmatex:
+      generic: true
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+extra_javascript:
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/SS-012/novax
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/novax
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started.md
+      - Core Concepts: concepts.md
+  - API Reference:
+      - Tensor: api/tensor.md
+      - Math Operations: api/math.md
+      - Activations: api/activations.md
+      - Reductions: api/reductions.md
+      - Linear Algebra: api/linalg.md
+      - Autograd: api/autograd.md
+  - Changelog: changelog.md
