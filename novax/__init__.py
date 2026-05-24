@@ -8,17 +8,23 @@ Author: Shohaib Shah
 License: MIT
 """
 
-__version__ = "0.1.16"
+__version__ = "0.2.0"
 __author__ = "Shohaib Shah"
 
 from .core import Tensor, GPU_AVAILABLE
 from . import ops
-from .dispatch import add, sub, mul, div
+from .dispatch import (
+    add, sub, mul, div, pow, matmul,
+    exp, log, sqrt, abs, neg,
+    relu, sigmoid, tanh, softmax,
+    sum, mean, max, min,
+)
+from .autograd import no_grad
+from .ops.launcher import launch_matmul_bias_relu
+
 
 def set_default_device(device: str):
-    """
-    Set the default device for operations: "cpu" or "gpu"
-    """
+    """Set the default execution device: 'cpu' or 'gpu'."""
     from novax import dispatch
     dispatch.DEFAULT_DEVICE = device.lower()
     print(f"[NovaX] Default device set to: {dispatch.DEFAULT_DEVICE.upper()}")
