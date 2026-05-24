@@ -9,10 +9,12 @@ except Exception:
 
 DEFAULT_DEVICE = "gpu" if GPU_AVAILABLE else "cpu"
 
-if GPU_AVAILABLE:
+try:
     from novax.ops.gpu import add as gpu_add, sub as gpu_sub, mul as gpu_mul, div as gpu_div
-else:
-    from novax.ops.cpu import add as cpu_add, sub as cpu_sub, mul as cpu_mul, div as cpu_div
+except Exception:
+    gpu_add = gpu_sub = gpu_mul = gpu_div = None
+
+from novax.ops.cpu import add as cpu_add, sub as cpu_sub, mul as cpu_mul, div as cpu_div
 
 
 # ------------------------------

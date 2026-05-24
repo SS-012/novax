@@ -95,9 +95,9 @@ class Tensor:
     #  GPU transfer operations
     # ---------------------------
     def _to_gpu(self):
-        self.nbytes = self.data.nbytes
-        self.gpu_ptr = cuda.mem_alloc(self.data.nbytes)
+        self.gpu_ptr = mempool.alloc(self.data.nbytes)
         cuda.memcpy_htod(self.gpu_ptr, self.data)
+        self.data = None
         self.on_gpu = True
 
     def to_gpu(self):
@@ -106,10 +106,10 @@ class Tensor:
         """
         if not GPU_AVAILABLE:
             raise RuntimeError("GPU not available")
-        if self.data is None:
-            raise ValueError("Cannot upload a tensor without host data")
         if self.gpu_ptr is not None:
             return self
+        if self.data is None:
+            raise ValueError("Cannot upload a tensor without host data")
         self._to_gpu()
         return self
 
@@ -182,11 +182,15 @@ class Tensor:
         if fused_expr is not None and all(t.on_gpu for t in leaves):
             return launch_fused(leaves, fused_expr, "fused_kernel")
 
-        # Fallback: binary fused kernel or scalar op
+        # Fallback: scalar shortcut for mul/div with constant RHS
         if self.op in ("mul", "div") and getattr(self.inputs[1], "is_constant", False):
             scalar = float(self.inputs[1].const_value)
             expr = "a[idx] * s" if self.op == "mul" else "a[idx] / s"
             return launch_kernel(left, None, "fused_kernel_scalar", expr, scalar=scalar)
+
+        # General binary GPU fallback
+        op_symbol = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[self.op]
+        return launch_kernel(left, right, f"{self.op}_kernel", f"a[idx] {op_symbol} b[idx]")
 
     def _emit_expr(self):
         """

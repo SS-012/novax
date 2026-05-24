@@ -5,4 +5,5 @@ CPU fallback elementwise subtraction operation
 """
 
 def sub(a, b):
-    return a.data - b.data
+    from novax.core import Tensor
+    return Tensor(a.data - b.data)
