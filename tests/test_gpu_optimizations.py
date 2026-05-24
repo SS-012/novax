@@ -16,7 +16,7 @@ import pytest
 import numpy as np
 
 import novax as nx
-from novax.core import Tensor, GPU_AVAILABLE, _DEFAULT_DTYPE
+from novax.core import Tensor, GPU_AVAILABLE
 from novax.ops.launcher import (
     CUDAGraph,
     launch_matmul_bias,
@@ -32,7 +32,7 @@ from novax.ops.gpu.triton_softmax import triton_softmax_1d
 # ---------------------------------------------------------------------------
 
 class TestCuBLASMatmul:
-    """Item 0: matrix multiplication dispatched through launch_matmul."""
+    """Item 0: matrix multiplication dispatched through the CPU/GPU path."""
 
     def test_cpu_matmul_correct_shape(self):
         """CPU: matmul via dispatch produces a result with the expected shape."""
@@ -100,7 +100,7 @@ class TestCUDAGraph:
         assert graph._graph_exec is None
 
     def test_replay_before_capture_raises(self):
-        """CPU: calling replay() before capture raises RuntimeError."""
+        """CPU: calling replay() before a capture raises RuntimeError."""
         graph = CUDAGraph()
         with pytest.raises(RuntimeError, match="No graph captured"):
             graph.replay()
@@ -119,11 +119,19 @@ class TestCUDAGraph:
 
         graph = CUDAGraph()
         with graph:
-            out = (x @ W + b).eval()  # captured
-        # out was evaluated during capture; verify shape
+            # Build and evaluate the lazy graph inside the capture context.
+            relu_node = Tensor(None, op="relu", inputs=[
+                Tensor(None, op="add", inputs=[
+                    Tensor(None, op="matmul", inputs=[x, W]),
+                    b,
+                ])
+            ])
+            out = relu_node.eval()
+
+        # Result produced during capture should have the correct shape.
         assert out.shape == (M, N)
 
-        # Replay must not raise
+        # replay() must not raise on any of the 5 iterations.
         for _ in range(5):
             graph.replay()
 
@@ -136,7 +144,7 @@ class TestFp16:
     """Item 6: half-precision tensor creation, conversion, and arithmetic."""
 
     def test_tensor_explicit_float16_dtype(self):
-        """CPU: Tensor created with dtype=np.float16 carries float16 dtype."""
+        """CPU: Tensor([1,2,3], dtype=np.float16).dtype == np.float16."""
         t = Tensor([1.0, 2.0, 3.0], dtype=np.float16)
         assert t.dtype == np.float16
 
@@ -161,13 +169,13 @@ class TestFp16:
         assert t_f32.dtype == np.float32
 
     def test_tensor_float_correct_values(self):
-        """CPU: tensor.float() preserves values."""
+        """CPU: tensor.float() preserves values from float16 source."""
         t = Tensor([1.5, 2.5, 3.5], dtype=np.float16)
         t_f32 = t.float()
         np.testing.assert_array_almost_equal(t_f32.data, [1.5, 2.5, 3.5], decimal=3)
 
     def test_set_dtype_float16_changes_default(self):
-        """CPU: set_dtype('float16') changes _DEFAULT_DTYPE to np.float16."""
+        """CPU: set_dtype('float16') changes _DEFAULT_DTYPE; float32 restores it."""
         import novax.core as _core
         try:
             nx.set_dtype("float16")
@@ -189,22 +197,28 @@ class TestFp16:
         t = Tensor([1.0, 2.0])
         assert t.dtype == np.float32
 
-    def test_set_dtype_aliases(self):
-        """CPU: 'fp16' and 'half' are accepted aliases for float16."""
+    def test_set_dtype_fp16_alias(self):
+        """CPU: 'fp16' alias for set_dtype works and is restored in finally block."""
         import novax.core as _core
-        for alias in ("fp16", "half"):
-            try:
-                nx.set_dtype(alias)
-                assert _core._DEFAULT_DTYPE == np.float16
-            finally:
-                nx.set_dtype("float32")
+        try:
+            nx.set_dtype("fp16")
+            assert _core._DEFAULT_DTYPE == np.float16
+        finally:
+            nx.set_dtype("float32")
 
-    def test_float16_arithmetic_preserves_dtype(self):
-        """CPU: arithmetic on float16 tensors via eval() produces a result tensor."""
+    def test_set_dtype_half_alias(self):
+        """CPU: 'half' alias for set_dtype works and is restored in finally block."""
+        import novax.core as _core
+        try:
+            nx.set_dtype("half")
+            assert _core._DEFAULT_DTYPE == np.float16
+        finally:
+            nx.set_dtype("float32")
+
+    def test_float16_arithmetic_dispatch_path(self):
+        """CPU: arithmetic on float16 tensors via eval() produces correct result."""
         a = Tensor([1.0, 2.0, 4.0], dtype=np.float16)
         b = Tensor([2.0, 3.0, 1.0], dtype=np.float16)
-        # The CPU dispatch path operates on numpy arrays; the result dtype
-        # follows numpy promotion rules for float16 inputs.
         result = (a + b).eval()
         assert isinstance(result, Tensor)
         np.testing.assert_array_almost_equal(
@@ -213,7 +227,7 @@ class TestFp16:
 
     @pytest.mark.skipif(not GPU_AVAILABLE, reason="GPU not available")
     def test_fp16_gpu_roundtrip(self):
-        """GPU: fp16 tensor round-trips through to_gpu()/to_host() correctly."""
+        """GPU: fp16 tensor round-trips through to_gpu()/to_host() with correct values."""
         arr = np.array([1.0, 0.5, 2.5, 3.0], dtype=np.float16)
         t = Tensor(arr, dtype=np.float16)
         t.to_gpu()
@@ -230,13 +244,11 @@ class TestFp16:
 class TestTritonSoftmax:
     """Item 7: Triton-based fused 1D softmax kernel."""
 
-    def test_triton_softmax_returns_none_without_gpu(self):
-        """CPU: triton_softmax_1d returns None when Triton is unavailable."""
-        # In CI (no GPU / no Triton), the function must return None gracefully.
+    def test_triton_softmax_returns_none_without_triton(self):
+        """CPU: triton_softmax_1d returns None when Triton is unavailable (no GPU/Triton in CI)."""
         if GPU_AVAILABLE:
-            pytest.skip("Skipping CPU-only assertion — GPU is present in this env")
-        # Build a minimal fake Tensor-like object so the import doesn't fail.
-        # triton_softmax_1d checks _TRITON_AVAILABLE at the top and returns None.
+            pytest.skip("Skipping CPU-only assertion — GPU present; Triton may be available")
+        # Without Triton installed, the function must return None gracefully.
         result = triton_softmax_1d(Tensor([1.0, 2.0, 3.0]))
         assert result is None
 
@@ -252,17 +264,18 @@ class TestTritonSoftmax:
             pytest.skip("Triton not available in this GPU environment")
 
         result_host = result.to_host()
-        # Reference softmax
+
+        # Reference numerically-stable softmax
         exp_a = np.exp(a_np - np.max(a_np))
         ref = exp_a / np.sum(exp_a)
 
         np.testing.assert_array_almost_equal(result_host, ref, decimal=4)
-        # Softmax output must sum to 1.0
+        # The output probabilities must sum to 1.0.
         assert abs(float(np.sum(result_host)) - 1.0) < 1e-4
 
     @pytest.mark.skipif(not GPU_AVAILABLE, reason="GPU not available")
     def test_triton_softmax_shape_preserved(self):
-        """GPU: triton_softmax_1d preserves input shape."""
+        """GPU: triton_softmax_1d preserves the input shape."""
         n = 512
         t = Tensor(np.random.randn(n).astype(np.float32)).to_gpu()
         result = triton_softmax_1d(t)
@@ -278,7 +291,7 @@ class TestTritonSoftmax:
 class TestPatternMatching:
     """Item 8: lazy graph pattern matching for matmul+bias+relu and matmul+bias."""
 
-    # --- _match_matmul_bias_relu ---
+    # ---- _match_matmul_bias_relu ----
 
     def test_match_matmul_bias_relu_returns_triple(self):
         """CPU: _match_matmul_bias_relu() returns (A, B, bias) for relu(A@B+bias)."""
@@ -331,7 +344,7 @@ class TestPatternMatching:
         match = node._match_matmul_bias_relu()
         assert match is None
 
-    # --- _match_matmul_bias ---
+    # ---- _match_matmul_bias ----
 
     def test_match_matmul_bias_returns_triple(self):
         """CPU: _match_matmul_bias() returns (A, B, bias) for A@B+bias."""
@@ -372,10 +385,10 @@ class TestPatternMatching:
         match = node._match_matmul_bias()
         assert match is None
 
-    # --- correctness: eval on CPU must not change when pattern matching runs ---
+    # ---- eval correctness: CPU path unchanged after pattern matching ----
 
     def test_eval_relu_matmul_bias_cpu_correctness(self):
-        """CPU: eval() of relu(A@B+bias) on CPU tensors gives same result before/after."""
+        """CPU: eval() of relu(A@B+bias) on CPU tensors gives correct result vs numpy."""
         np.random.seed(42)
         M, K, N = 8, 4, 6
         a_np = np.random.randn(M, K).astype(np.float32)
@@ -386,10 +399,10 @@ class TestPatternMatching:
         W = Tensor(W_np)
         b = Tensor(b_np)
 
-        # Reference via numpy
+        # numpy reference
         ref = np.maximum(0.0, a_np @ W_np + b_np)
 
-        # Evaluate via lazy graph (CPU path, no GPU → pattern match branch skipped)
+        # Lazy graph — on CPU the pattern-match branch is skipped (GPU_AVAILABLE is False)
         lazy = Tensor(None, op="relu", inputs=[
             Tensor(None, op="add", inputs=[
                 Tensor(None, op="matmul", inputs=[A, W]),
@@ -400,7 +413,7 @@ class TestPatternMatching:
         np.testing.assert_array_almost_equal(result.data, ref, decimal=5)
 
     def test_eval_matmul_bias_cpu_correctness(self):
-        """CPU: eval() of A@W+bias on CPU tensors gives the same result as numpy."""
+        """CPU: eval() of A@W+bias on CPU tensors matches numpy reference."""
         np.random.seed(7)
         M, K, N = 6, 3, 5
         a_np = np.random.randn(M, K).astype(np.float32)
@@ -420,11 +433,11 @@ class TestPatternMatching:
         result = lazy.eval()
         np.testing.assert_array_almost_equal(result.data, ref, decimal=5)
 
-    # --- GPU path: fused kernel is chosen and gives correct output ---
+    # ---- GPU path: fused kernels are chosen and give correct output ----
 
     @pytest.mark.skipif(not GPU_AVAILABLE, reason="GPU not available")
     def test_gpu_relu_matmul_bias_routes_to_fused_kernel(self):
-        """GPU: eval() of relu(x@W+b) on GPU tensors uses launch_matmul_bias_relu."""
+        """GPU: eval() of relu(x@W+b) on GPU tensors routes through launch_matmul_bias_relu."""
         np.random.seed(99)
         M, K, N = 16, 8, 4
         x_np = np.random.randn(M, K).astype(np.float32)
@@ -435,22 +448,22 @@ class TestPatternMatching:
         W = Tensor(W_np).to_gpu()
         b = Tensor(b_np).to_gpu()
 
-        # Build lazy graph and eval (pattern match triggers fused kernel)
-        result = (x @ W + b)
-        # Wrap in relu lazy node
-        fused_node = Tensor(None, op="relu", inputs=[result])
+        # Build lazy graph; on GPU the pattern match should pick launch_matmul_bias_relu.
+        fused_node = Tensor(None, op="relu", inputs=[
+            Tensor(None, op="add", inputs=[
+                Tensor(None, op="matmul", inputs=[x, W]),
+                b,
+            ])
+        ])
         out = fused_node.eval()
 
-        # Verify shape
         assert out.shape == (M, N)
-
-        # Verify values match numpy reference
         ref = np.maximum(0.0, x_np @ W_np + b_np)
         np.testing.assert_array_almost_equal(out.to_host(), ref, decimal=4)
 
     @pytest.mark.skipif(not GPU_AVAILABLE, reason="GPU not available")
     def test_gpu_matmul_bias_routes_to_fused_kernel(self):
-        """GPU: eval() of x@W+b on GPU tensors uses launch_matmul_bias."""
+        """GPU: eval() of x@W+b on GPU tensors routes through launch_matmul_bias."""
         np.random.seed(13)
         M, K, N = 12, 6, 3
         x_np = np.random.randn(M, K).astype(np.float32)
