@@ -8,7 +8,7 @@ Author: Shohaib Shah
 License: MIT
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.16"
 __author__ = "Shohaib Shah"
 
 from .core import Tensor, GPU_AVAILABLE

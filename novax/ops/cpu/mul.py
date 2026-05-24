@@ -5,4 +5,5 @@ CPU fallback elementwise multiplication operation
 """
 
 def mul(a, b):
-    return a.data * b.data
+    from novax.core import Tensor
+    return Tensor(a.data * b.data)
