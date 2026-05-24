@@ -33,10 +33,25 @@ def _get_stream():
             _stream = None
     return _stream
 
+
+def _optimal_block_size() -> int:
+    """Returns the largest warp-aligned block size supported by the current device."""
+    if cuda is None:
+        return 256
+    try:
+        max_threads = cuda.Device(0).get_attribute(
+            cuda.device_attribute.MAX_THREADS_PER_BLOCK
+        )
+        for size in [512, 256, 128]:
+            if size <= max_threads:
+                return size
+    except Exception:
+        pass
+    return 256
+
+
 def get_kernel(name: str, src: str):
-    """
-    Compile (if needed) and return a cached CUDA kernel by name.
-    """
+    """Compile (if needed) and return a cached CUDA kernel by name."""
     key = (name, src)
     if key in _kernel_cache:
         return _kernel_cache[key]
@@ -48,16 +63,16 @@ def get_kernel(name: str, src: str):
     return func
 
 
-def launch_kernel(a, b = None, op_name: str = "custom_kernel", expr: str = None, scalar: float | None = None):
+def launch_kernel(a, b=None, op_name: str = "custom_kernel", expr: str = None, scalar: float | None = None):
     """
     Generic GPU kernel launcher for elementwise operations.
 
     Args:
         a (Tensor): Input tensor on GPU.
-        b (Tensor, optional): Second input tensor for binary ops. Defaults to None.
-        op_name (str): Kernel name.
-        expr (str): CUDA expression to execute per element.
-                     Use 'a[idx]' and optionally 'b[idx]' in the expression.
+        b (Tensor, optional): Second input tensor for binary ops.
+        op_name (str): Kernel function name.
+        expr (str): CUDA C expression per element. Use a[idx] / b[idx] / s.
+        scalar (float, optional): Scalar constant broadcast to all elements.
     """
     if cuda is None:
         raise RuntimeError("GPU not available: cannot launch kernels")
@@ -65,12 +80,10 @@ def launch_kernel(a, b = None, op_name: str = "custom_kernel", expr: str = None,
     n = a.size
     nbytes = n * 4
 
-    # Basic sanity check for binary ops
     if b is not None:
         assert b.on_gpu, "Input tensor 'b' must be on GPU."
         assert a.size == b.size, "Tensor size mismatch"
 
-    # Handle unary/binary/scalar kernels
     if b is None and scalar is None:
         kernel_src = f"""
         __global__ void {op_name}(const float* a, float* out, int n) {{
@@ -102,10 +115,10 @@ def launch_kernel(a, b = None, op_name: str = "custom_kernel", expr: str = None,
     func = get_kernel(op_name, kernel_src)
     out_gpu = mempool.alloc(nbytes)
 
-    block = (256, 1, 1)
-    grid = ((n + block[0] - 1) // block[0], 1, 1)
+    bs = _optimal_block_size()
+    block = (bs, 1, 1)
+    grid = ((n + bs - 1) // bs, 1, 1)
 
-    # Dispatch correct kernel signature
     stream = _get_stream()
     if b is None and scalar is None:
         func(a.gpu_ptr, out_gpu, np.int32(n), block=block, grid=grid, stream=stream)
@@ -114,7 +127,6 @@ def launch_kernel(a, b = None, op_name: str = "custom_kernel", expr: str = None,
     else:
         func(a.gpu_ptr, b.gpu_ptr, out_gpu, np.int32(n), block=block, grid=grid, stream=stream)
 
-    # Lazy import to avoid circular dependency at module import time
     from importlib import import_module
     Tensor = getattr(import_module("novax.core"), "Tensor")
     return Tensor(out_gpu, gpu=True, inputs=[a, b] if b else [a])
@@ -143,8 +155,9 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     """
     func = get_kernel(op_name, kernel_src)
     out_gpu = mempool.alloc(n * 4)
-    block = (256, 1, 1)
-    grid = ((n + block[0] - 1) // block[0], 1, 1)
+    bs = _optimal_block_size()
+    block = (bs, 1, 1)
+    grid = ((n + bs - 1) // bs, 1, 1)
 
     args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n)]
     stream = _get_stream()
@@ -152,3 +165,210 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     from importlib import import_module
     Tensor = getattr(import_module("novax.core"), "Tensor")
     return Tensor(out_gpu, gpu=True, inputs=inputs)
+
+
+def launch_reduce(a, op_name: str, reduce_type: str):
+    """
+    Two-pass parallel reduction kernel using shared memory.
+
+    Args:
+        a (Tensor): Input tensor on GPU (any size).
+        op_name (str): Kernel name prefix.
+        reduce_type (str): One of "sum", "max", "min".
+
+    Returns:
+        Tensor: Scalar result tensor on GPU (shape (1,)).
+    """
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    assert a.on_gpu, "Input tensor must be on GPU"
+
+    if reduce_type == "sum":
+        init_val = "0.0f"
+        reduce_op = "smem[tid] += smem[tid + stride];"
+    elif reduce_type == "max":
+        init_val = "-3.402823e+38f"
+        reduce_op = "smem[tid] = fmaxf(smem[tid], smem[tid + stride]);"
+    elif reduce_type == "min":
+        init_val = "3.402823e+38f"
+        reduce_op = "smem[tid] = fminf(smem[tid], smem[tid + stride]);"
+    else:
+        raise ValueError(f"Unknown reduce_type: {reduce_type}")
+
+    BS = 256
+    kernel_src = f"""
+    __global__ void {op_name}(const float* in, float* out, int n) {{
+        extern __shared__ float smem[];
+        int tid = threadIdx.x;
+        int idx = blockIdx.x * blockDim.x + tid;
+        smem[tid] = (idx < n) ? in[idx] : {init_val};
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {{
+            if (tid < stride) {{
+                {reduce_op}
+            }}
+            __syncthreads();
+        }}
+        if (tid == 0) out[blockIdx.x] = smem[0];
+    }}
+    """
+
+    n = a.size
+    grid_size = (n + BS - 1) // BS
+    partial_gpu = mempool.alloc(grid_size * 4)
+    func = get_kernel(op_name, kernel_src)
+    stream = _get_stream()
+    func(a.gpu_ptr, partial_gpu, np.int32(n),
+         block=(BS, 1, 1), grid=(grid_size, 1, 1),
+         shared=BS * 4, stream=stream)
+
+    if grid_size == 1:
+        final_gpu = partial_gpu
+    else:
+        # Second pass to reduce partial results
+        final_gpu = mempool.alloc(4)
+        func2_name = op_name + "_pass2"
+        func2_src = kernel_src.replace(op_name, func2_name)
+        func2 = get_kernel(func2_name, func2_src)
+        grid2 = (grid_size + BS - 1) // BS
+        partial2_gpu = mempool.alloc(grid2 * 4)
+        func2(partial_gpu, partial2_gpu, np.int32(grid_size),
+              block=(BS, 1, 1), grid=(grid2, 1, 1),
+              shared=BS * 4, stream=stream)
+        if grid2 == 1:
+            final_gpu = partial2_gpu
+        else:
+            # One more pass (handles up to 256*256*256 = 16M elements)
+            func3_name = op_name + "_pass3"
+            func3_src = kernel_src.replace(op_name, func3_name)
+            func3 = get_kernel(func3_name, func3_src)
+            final_gpu = mempool.alloc(4)
+            func3(partial2_gpu, final_gpu, np.int32(grid2),
+                  block=(BS, 1, 1), grid=(1, 1, 1),
+                  shared=BS * 4, stream=stream)
+
+    from importlib import import_module
+    Tensor = getattr(import_module("novax.core"), "Tensor")
+    result = Tensor(final_gpu, gpu=True, inputs=[a])
+    result.shape = (1,)
+    result.size = 1
+    result.dtype = np.float32
+    return result
+
+
+def launch_matmul(a, b):
+    """
+    Tiled matrix multiplication using shared memory.
+    a: (M, K), b: (K, N) → result: (M, N)
+    """
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    assert a.on_gpu and b.on_gpu, "Both tensors must be on GPU"
+    assert len(a.shape) == 2 and len(b.shape) == 2, "matmul requires 2D tensors"
+    M, K = a.shape
+    K2, N = b.shape
+    assert K == K2, f"Shape mismatch for matmul: {a.shape} @ {b.shape}"
+
+    TILE = 16
+    kernel_src = f"""
+    #define TILE_SIZE {TILE}
+    __global__ void matmul_kernel(
+        const float* A, const float* B, float* C,
+        int M, int K, int N
+    ) {{
+        __shared__ float As[TILE_SIZE][TILE_SIZE];
+        __shared__ float Bs[TILE_SIZE][TILE_SIZE];
+        int row = blockIdx.y * TILE_SIZE + threadIdx.y;
+        int col = blockIdx.x * TILE_SIZE + threadIdx.x;
+        float acc = 0.0f;
+        for (int t = 0; t < (K + TILE_SIZE - 1) / TILE_SIZE; t++) {{
+            As[threadIdx.y][threadIdx.x] = (row < M && t * TILE_SIZE + threadIdx.x < K)
+                ? A[row * K + t * TILE_SIZE + threadIdx.x] : 0.0f;
+            Bs[threadIdx.y][threadIdx.x] = (col < N && t * TILE_SIZE + threadIdx.y < K)
+                ? B[(t * TILE_SIZE + threadIdx.y) * N + col] : 0.0f;
+            __syncthreads();
+            for (int k = 0; k < TILE_SIZE; k++)
+                acc += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+            __syncthreads();
+        }}
+        if (row < M && col < N) C[row * N + col] = acc;
+    }}
+    """
+    func = get_kernel("matmul_kernel", kernel_src)
+    out_gpu = mempool.alloc(M * N * 4)
+    block = (TILE, TILE, 1)
+    grid = ((N + TILE - 1) // TILE, (M + TILE - 1) // TILE, 1)
+
+    stream = _get_stream()
+    func(a.gpu_ptr, b.gpu_ptr, out_gpu,
+         np.int32(M), np.int32(K), np.int32(N),
+         block=block, grid=grid, stream=stream)
+
+    from importlib import import_module
+    Tensor = getattr(import_module("novax.core"), "Tensor")
+    result = Tensor(out_gpu, gpu=True, inputs=[a, b])
+    result.shape = (M, N)
+    result.size = M * N
+    result.dtype = np.float32
+    return result
+
+
+def launch_matmul_bias_relu(x, w, bias):
+    """
+    Fused matmul + bias add + ReLU in a single CUDA kernel pass.
+    x: (M, K), w: (K, N), bias: (N,) → result: (M, N)
+    Saves two global memory round-trips vs. three separate ops.
+    """
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    assert x.on_gpu and w.on_gpu and bias.on_gpu, "All tensors must be on GPU"
+    M, K = x.shape
+    K2, N = w.shape
+    assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
+    assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
+
+    TILE = 16
+    kernel_src = f"""
+    #define TILE_SIZE {TILE}
+    __global__ void matmul_bias_relu_kernel(
+        const float* X, const float* W, const float* B, float* C,
+        int M, int K, int N
+    ) {{
+        __shared__ float Xs[TILE_SIZE][TILE_SIZE];
+        __shared__ float Ws[TILE_SIZE][TILE_SIZE];
+        int row = blockIdx.y * TILE_SIZE + threadIdx.y;
+        int col = blockIdx.x * TILE_SIZE + threadIdx.x;
+        float acc = 0.0f;
+        for (int t = 0; t < (K + TILE_SIZE - 1) / TILE_SIZE; t++) {{
+            Xs[threadIdx.y][threadIdx.x] = (row < M && t * TILE_SIZE + threadIdx.x < K)
+                ? X[row * K + t * TILE_SIZE + threadIdx.x] : 0.0f;
+            Ws[threadIdx.y][threadIdx.x] = (col < N && t * TILE_SIZE + threadIdx.y < K)
+                ? W[(t * TILE_SIZE + threadIdx.y) * N + col] : 0.0f;
+            __syncthreads();
+            for (int k = 0; k < TILE_SIZE; k++)
+                acc += Xs[threadIdx.y][k] * Ws[k][threadIdx.x];
+            __syncthreads();
+        }}
+        if (row < M && col < N) {{
+            float val = acc + B[col];
+            C[row * N + col] = fmaxf(0.0f, val);
+        }}
+    }}
+    """
+    func = get_kernel("matmul_bias_relu_kernel", kernel_src)
+    out_gpu = mempool.alloc(M * N * 4)
+    block = (TILE, TILE, 1)
+    grid = ((N + TILE - 1) // TILE, (M + TILE - 1) // TILE, 1)
+
+    stream = _get_stream()
+    func(x.gpu_ptr, w.gpu_ptr, bias.gpu_ptr, out_gpu,
+         np.int32(M), np.int32(K), np.int32(N),
+         block=block, grid=grid, stream=stream)
+
+    from importlib import import_module
+    Tensor = getattr(import_module("novax.core"), "Tensor")
+    result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
+    result.shape = (M, N)
+    result.size = M * N
+    result.dtype = np.float32
+    return result
