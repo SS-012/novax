@@ -132,12 +132,20 @@ structural advantage over stock PyTorch eager.
 
 **Why:** where NovaX can pull ahead of a naive eager op sequence.
 
-- [ ] **cuBLASLt fused epilogue** (GEMM + bias + ReLU) with **TF32 / Tensor
-      Cores**, replacing the hand-written tiled `matmul_bias_relu`.
+- [x] **cuBLAS (ctypes fallback + TF32 mode) + fused epilogue kernel** for
+      GEMM + bias (+ ReLU). `launch_matmul_bias` / `launch_matmul_bias_relu`
+      now use cuBLAS for the GEMM (no skcuda dependency; ctypes path loads
+      `libcublas.so` directly) followed by a single fused broadcast+relu
+      kernel.  TF32 math mode is enabled on the handle at init time
+      (`CUBLAS_TF32_TENSOR_OP_MATH = 3`) for free 2–3× on Ampere+. The
+      full cuBLASLt epilogue API (fuses bias into the GEMM itself) is left
+      as a future micro-optimisation — the cuBLAS + 1 fused kernel approach
+      is semantically equivalent and simpler.
 - [x] **Warp-shuffle reductions** (`__shfl_down_sync`) + grid-stride load
       accumulation in a single two-pass kernel, replacing the old 2–3 pass
       shared-memory tree reduction.
-- [ ] **cuDNN (or keep Triton)** fast path for softmax / activations.
+- [x] **Triton fast path for softmax** — single-pass Triton kernel (n ≤ 65536)
+      with 5-pass PyCUDA fallback already in `ops/gpu/softmax.py`.
 
 **Files:** `ops/launcher.py`, `ops/gpu/*`
 

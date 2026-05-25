@@ -663,78 +663,171 @@ __global__ void fp16_to_fp32(const __half* in, float* out, int n) {
 
 
 # ---------------------------------------------------------------------------
-# Item 0: cuBLAS-backed matmul
+# Item 0: cuBLAS-backed matmul (skcuda or ctypes fallback, with TF32 on Ampere+)
 # ---------------------------------------------------------------------------
 
-_cublas_handle = None   # persistent cuBLAS handle (create/destroy is expensive)
+_cublas_handle = None    # persistent handle — skcuda int or ctypes c_void_p value
+_cublas_backend = None   # 'skcuda' | 'ctypes'
+_ctypes_cublas_lib = None
+
+
+def _get_ctypes_cublas():
+    """Load libcublas via ctypes. Returns the CDLL or None."""
+    global _ctypes_cublas_lib
+    if _ctypes_cublas_lib is not None:
+        return _ctypes_cublas_lib
+    import ctypes
+    for name in ('libcublas.so.12', 'libcublas.so.11', 'libcublas.so.10', 'libcublas.so'):
+        try:
+            _ctypes_cublas_lib = ctypes.CDLL(name)
+            return _ctypes_cublas_lib
+        except Exception:
+            pass
+    return None
+
+
+def _enable_tf32(handle_val, lib_or_skcuda):
+    """Best-effort: enable TF32 math mode (CUBLAS_TF32_TENSOR_OP_MATH = 3)."""
+    # TF32 is only available on Ampere+ (sm_80+); no-op on older GPUs.
+    try:
+        if _cublas_backend == 'skcuda':
+            lib_or_skcuda.cublasSetMathMode(handle_val, 3)
+        else:
+            import ctypes
+            lib_or_skcuda.cublasSetMathMode(
+                ctypes.c_void_p(handle_val), ctypes.c_int(3))
+    except Exception:
+        pass
 
 
 def _get_cublas_handle():
     """Lazily create and cache a single cuBLAS handle. None if unavailable."""
-    global _cublas_handle
+    global _cublas_handle, _cublas_backend
     if _cublas_handle is not None:
         return _cublas_handle
+
+    # --- path 1: skcuda ---
     try:
         from skcuda import cublas as sk_cublas
-    except ImportError:
-        return None
-    try:
-        _cublas_handle = sk_cublas.cublasCreate()
+        h = sk_cublas.cublasCreate()
+        _cublas_handle = h
+        _cublas_backend = 'skcuda'
+        _enable_tf32(h, sk_cublas)
+        import atexit
+        atexit.register(_destroy_cublas_handle)
+        return _cublas_handle
     except Exception:
-        return None
-    import atexit
-    atexit.register(_destroy_cublas_handle)
-    return _cublas_handle
+        pass
+
+    # --- path 2: ctypes libcublas ---
+    lib = _get_ctypes_cublas()
+    if lib is not None:
+        import ctypes
+        handle_ptr = ctypes.c_void_p()
+        try:
+            if lib.cublasCreate_v2(ctypes.byref(handle_ptr)) == 0 and handle_ptr.value:
+                _cublas_handle = handle_ptr.value
+                _cublas_backend = 'ctypes'
+                _enable_tf32(_cublas_handle, lib)
+                import atexit
+                atexit.register(_destroy_cublas_handle)
+                return _cublas_handle
+        except Exception:
+            pass
+
+    return None
 
 
 def _destroy_cublas_handle():
-    global _cublas_handle
+    global _cublas_handle, _cublas_backend
     if _cublas_handle is None:
         return
     try:
-        from skcuda import cublas as sk_cublas
-        sk_cublas.cublasDestroy(_cublas_handle)
+        if _cublas_backend == 'skcuda':
+            from skcuda import cublas as sk_cublas
+            sk_cublas.cublasDestroy(_cublas_handle)
+        else:
+            import ctypes
+            lib = _get_ctypes_cublas()
+            if lib is not None:
+                lib.cublasDestroy_v2(ctypes.c_void_p(_cublas_handle))
     except Exception:
         pass
     finally:
         _cublas_handle = None
+        _cublas_backend = None
 
 
 def _launch_matmul_cublas(a, b):
     """
-    Matrix multiplication via cuBLAS cublasSgemm (scikit-cuda).
-    Returns None if scikit-cuda is not installed.
+    Matrix multiplication via cuBLAS cublasSgemm.
+    Tries skcuda first, then a ctypes-based fallback (no extra deps required).
+    Returns None if cuBLAS is unavailable in this environment.
     """
     handle = _get_cublas_handle()
     if handle is None:
         return None
-    from skcuda import cublas as sk_cublas
 
     M, K = a.shape
     _, N = b.shape
+    stream = _get_stream()
+
+    if _cublas_backend == 'skcuda':
+        from skcuda import cublas as sk_cublas
+        try:
+            if stream is not None:
+                try:
+                    sk_cublas.cublasSetStream(handle, stream.handle)
+                except Exception:
+                    pass
+            out_gpu = mempool.alloc(M * N * 4)
+            # cuBLAS is column-major: C = A@B (row-major) ↔ C^T = B^T @ A^T (col-major)
+            sk_cublas.cublasSgemm(
+                handle,
+                'n', 'n',
+                N, M, K,
+                np.float32(1.0),
+                b.gpu_ptr, N,
+                a.gpu_ptr, K,
+                np.float32(0.0),
+                out_gpu, N,
+            )
+            Tensor = _tensor_cls()
+            result = Tensor(out_gpu, gpu=True, inputs=[a, b])
+            result.shape = (M, N)
+            result.size = M * N
+            result.dtype = np.float32
+            return result
+        except Exception:
+            return None
+
+    # ctypes cuBLAS path (no skcuda dependency required)
+    import ctypes
+    lib = _ctypes_cublas_lib
     try:
-        # Run cuBLAS on our stream so it stays ordered with elementwise kernels.
-        stream = _get_stream()
         if stream is not None:
             try:
-                sk_cublas.cublasSetStream(handle, stream.handle)
+                lib.cublasSetStream_v2(
+                    ctypes.c_void_p(handle),
+                    ctypes.c_void_p(stream.handle))
             except Exception:
                 pass
         out_gpu = mempool.alloc(M * N * 4)
-        # cuBLAS uses column-major storage.
-        # To compute C = A @ B (row-major), we compute C^T = B^T @ A^T
-        # which in column-major notation is: cublasSgemm(N, M, K, B, N, A, K, C, N)
-        sk_cublas.cublasSgemm(
-            handle,
-            'n', 'n',      # no transpose for either operand (in col-major view)
-            N, M, K,
-            np.float32(1.0),
-            b.gpu_ptr, N,
-            a.gpu_ptr, K,
-            np.float32(0.0),
-            out_gpu, N,
+        alpha = ctypes.c_float(1.0)
+        beta  = ctypes.c_float(0.0)
+        # Column-major trick: C = A@B ↔ C^T = B^T @ A^T
+        ret = lib.cublasSgemm_v2(
+            ctypes.c_void_p(handle),
+            ctypes.c_int(0), ctypes.c_int(0),   # CUBLAS_OP_N, CUBLAS_OP_N
+            ctypes.c_int(N), ctypes.c_int(M), ctypes.c_int(K),
+            ctypes.byref(alpha),
+            ctypes.c_void_p(int(b.gpu_ptr)), ctypes.c_int(N),
+            ctypes.c_void_p(int(a.gpu_ptr)), ctypes.c_int(K),
+            ctypes.byref(beta),
+            ctypes.c_void_p(int(out_gpu)), ctypes.c_int(N),
         )
-
+        if ret != 0:
+            return None
         Tensor = _tensor_cls()
         result = Tensor(out_gpu, gpu=True, inputs=[a, b])
         result.shape = (M, N)
@@ -817,8 +910,11 @@ def launch_matmul(a, b):
 
 def launch_matmul_bias(x, w, bias):
     """
-    Fused matmul + bias add in a single tiled kernel pass.
-    x: (M, K), w: (K, N), bias: (N,) → result: (M, N)
+    Matmul + bias: x(M,K) @ w(K,N) + bias(N,) → (M,N).
+
+    Uses cuBLAS GEMM (fast, TF32 on Ampere+) when available, followed by a
+    broadcast-add kernel for the bias. Falls back to a single tiled kernel
+    when cuBLAS is unavailable.
     """
     if cuda is None:
         raise RuntimeError("GPU not available: cannot launch kernels")
@@ -828,6 +924,12 @@ def launch_matmul_bias(x, w, bias):
     assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
 
+    # Fast path: cuBLAS GEMM + fused broadcast-add kernel for the bias.
+    mm = _launch_matmul_cublas(x, w)
+    if mm is not None:
+        return launch_fused([mm, bias], f"x0[idx] + x1[idx % {N}]", "mb_fused")
+
+    # Tiled fallback: GEMM and bias fused in one kernel.
     TILE = 16
     kernel_src = f"""
     #define TILE_SIZE {TILE}
@@ -873,8 +975,10 @@ def launch_matmul_bias(x, w, bias):
 
 def launch_matmul_bias_relu(x, w, bias):
     """
-    Fused matmul + bias add + ReLU in a single CUDA kernel pass.
-    x: (M, K), w: (K, N), bias: (N,) → result: (M, N)
+    Matmul + bias + ReLU: x(M,K) @ w(K,N) + bias(N,) → relu → (M,N).
+
+    Uses cuBLAS GEMM + one fused bias+relu broadcast kernel when cuBLAS is
+    available. Falls back to a single tiled kernel otherwise.
     """
     if cuda is None:
         raise RuntimeError("GPU not available: cannot launch kernels")
@@ -884,6 +988,15 @@ def launch_matmul_bias_relu(x, w, bias):
     assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
 
+    # Fast path: cuBLAS GEMM + fused bias+relu broadcast kernel.
+    mm = _launch_matmul_cublas(x, w)
+    if mm is not None:
+        return launch_fused(
+            [mm, bias],
+            f"fmaxf(0.0f, x0[idx] + x1[idx % {N}])",
+            "mbr_fused")
+
+    # Tiled fallback: GEMM, bias, and relu fused in one kernel.
     TILE = 16
     kernel_src = f"""
     #define TILE_SIZE {TILE}
