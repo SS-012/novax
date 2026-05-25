@@ -108,17 +108,21 @@ activations / reductions to drop toward parity, small matmul to improve.
 **Why:** fixes the "kernel fusion" chart and activations; this is NovaX's
 structural advantage over stock PyTorch eager.
 
-- [ ] **Fuse through unary roots.** Route `eval()` through one fusion compiler
-      that handles the entire elementwise + unary subtree regardless of root op,
-      so `tanh(exp(a)+relu(b*c))` becomes **one** kernel, not 2–3.
-- [ ] **Broadcast-aware fusion.** Extend `launch_fused` to index broadcast leaves
-      as `x{i}[idx % size_i]` so bias/row-vectors can live inside a fused chain.
+- [x] **Fuse through unary roots.** `_try_full_fuse` (`core.py`) compiles the
+      maximal elementwise/activation subtree into one kernel regardless of root
+      op; non-fusable nodes (matmul, reductions, softmax) become evaluated leaves.
+      Gated on no-grad so the per-op path still attaches backward closures.
+- [x] **Broadcast-aware fusion.** `launch_fused` now sizes output to the largest
+      leaf and the template indexes broadcast leaves as `x{i}[idx % size_i]`.
+- [x] **Grid-stride loop** in the fused kernel (valid for any element count).
 - [ ] **Memoize the compiled expression** (fused source + leaf order) on the node
-      so repeated `eval()` in a loop skips Python re-derivation.
-- [ ] **Vectorized memory access** (`float4` / `half2`) + grid-stride loops in
-      generated elementwise kernels → up to ~2–4× on memory-bound ops.
+      so repeated `eval()` in a loop skips Python re-derivation. *(remaining)*
+- [ ] **Vectorized memory access** (`float4` / `half2`) in generated elementwise
+      kernels → up to ~2–4× on memory-bound ops. *(remaining)*
 
 **Files:** `core.py`, `ops/launcher.py`
+**Done:** full-subtree fusion + broadcast-aware leaves + grid-stride, verified by
+`tests/test_fusion_t2.py` (pure template-generation tests + GPU end-to-end).
 
 ---
 

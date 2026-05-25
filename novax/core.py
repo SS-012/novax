@@ -23,6 +23,9 @@ _UNARY_ELEMENTWISE = frozenset({"exp", "log", "sqrt", "abs", "neg", "relu", "sig
 _REDUCE_OPS = frozenset({"sum", "mean", "max", "min"})
 _BINARY_OPS = frozenset({"add", "sub", "mul", "div", "pow"})
 
+# Roots eligible for whole-subtree fusion (softmax has its own multi-pass path).
+_FUSABLE_ROOTS = _BINARY_OPS | (_UNARY_ELEMENTWISE - {"softmax"})
+
 _UNARY_CUDA_EXPR = {
     "exp":     "expf(a[idx])",
     "log":     "logf(a[idx])",
@@ -272,6 +275,107 @@ class Tensor:
             return None
         return mm_node.inputs[0], mm_node.inputs[1], bias_node
 
+    def _any_requires_grad(self) -> bool:
+        """True if any tensor reachable from this node requires gradients."""
+        seen = set()
+        stack = [self]
+        while stack:
+            node = stack.pop()
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            if getattr(node, "requires_grad", False):
+                return True
+            for inp in getattr(node, "inputs", None) or []:
+                stack.append(inp)
+        return False
+
+    # ------------------------------------------------------------------
+    # Item T2: whole-subtree elementwise/activation fusion
+    # ------------------------------------------------------------------
+
+    _FUSE_BINARY_SYM = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
+    _FUSE_UNARY_CUDA = {
+        "exp":     "expf({e})",
+        "log":     "logf({e})",
+        "sqrt":    "sqrtf({e})",
+        "abs":     "fabsf({e})",
+        "neg":     "(-({e}))",
+        "relu":    "fmaxf(0.0f, {e})",
+        "sigmoid": "(1.0f / (1.0f + expf(-({e}))))",
+        "tanh":    "tanhf({e})",
+    }
+
+    def _fuse_template(self):
+        """
+        Build the fused-kernel expression template for the maximal
+        elementwise/activation subtree rooted at self, plus the ordered list of
+        leaf graph-nodes. Pure: no evaluation, no GPU. Each leaf access is a
+        placeholder ``__L{i}__`` resolved to concrete indexing once sizes are
+        known. Constants are folded inline; non-fusable nodes (matmul,
+        reductions, softmax) and true leaves become placeholders.
+        """
+        leaves = []
+        index_map = {}
+
+        def leaf_slot(node):
+            key = id(node)
+            if key not in index_map:
+                index_map[key] = len(leaves)
+                leaves.append(node)
+            return index_map[key]
+
+        def build(node):
+            if getattr(node, "is_constant", False):
+                return f"{node.const_value:.8f}f"
+            op = getattr(node, "op", None)
+            is_leaf = getattr(node, "is_leaf", True)
+            if not is_leaf and op in self._FUSE_BINARY_SYM:
+                return f"({build(node.inputs[0])} {self._FUSE_BINARY_SYM[op]} {build(node.inputs[1])})"
+            if not is_leaf and op == "pow":
+                return f"powf({build(node.inputs[0])}, {build(node.inputs[1])})"
+            if not is_leaf and op in self._FUSE_UNARY_CUDA:
+                return self._FUSE_UNARY_CUDA[op].format(e=build(node.inputs[0]))
+            return f"__L{leaf_slot(node)}__"
+
+        return build(self), leaves
+
+    def _try_full_fuse(self):
+        """
+        Compile the maximal elementwise/activation subtree rooted at self into a
+        single CUDA kernel. Non-fusable leaves (matmul, reductions, softmax) are
+        evaluated to concrete GPU tensors; broadcast leaves are indexed modulo
+        their size. Returns a concrete Tensor or None when the subtree cannot be
+        expressed as one GPU kernel.
+        """
+        if not GPU_AVAILABLE:
+            return None
+
+        template, leaf_nodes = self._fuse_template()
+        if not leaf_nodes:
+            return None
+
+        leaves = []
+        for node in leaf_nodes:
+            ev = node if getattr(node, "is_leaf", True) else node.eval()
+            if not getattr(ev, "on_gpu", False):
+                return None
+            leaves.append(ev)
+
+        n = max(t.size for t in leaves)
+        big = max(leaves, key=lambda t: t.size)
+        for i, t in enumerate(leaves):
+            if t.size == n:
+                access = f"x{i}[idx]"
+            elif self._is_trailing_broadcast(big.shape, t.shape, t.size):
+                access = f"x{i}[idx % {t.size}]"
+            else:
+                return None   # broadcast not expressible in a flat fused kernel
+            template = template.replace(f"__L{i}__", access)
+
+        from novax.ops.launcher import launch_fused
+        return launch_fused(leaves, template, "ff_kernel")
+
     # ------------------------------------------------------------------
     # Evaluation / JIT compilation
     # ------------------------------------------------------------------
@@ -283,8 +387,10 @@ class Tensor:
         if self.is_leaf:
             return self
 
-        # Item 8: pattern-match fused kernels before per-op dispatch
-        if GPU_AVAILABLE:
+        # GPU forward-only fast paths — skipped when gradients are needed so the
+        # per-op path can attach backward closures.
+        if GPU_AVAILABLE and not self._any_requires_grad():
+            # Item 8: hand-fused matmul+bias(+relu) tiled kernels
             match = self._match_matmul_bias_relu()
             if match is not None:
                 A, B, bias = match
@@ -300,6 +406,13 @@ class Tensor:
                 if A_e.on_gpu and B_e.on_gpu and bias_e.on_gpu:
                     from novax.ops.launcher import launch_matmul_bias
                     return launch_matmul_bias(A_e, B_e, bias_e)
+
+            # Item T2: collapse the whole elementwise/activation subtree into one
+            # kernel (fuses through unary roots; non-fusable nodes become leaves).
+            if self.op in _FUSABLE_ROOTS:
+                fused = self._try_full_fuse()
+                if fused is not None:
+                    return fused
 
         if self.op in _UNARY_ELEMENTWISE or self.op in _REDUCE_OPS:
             inp = self.inputs[0].eval()

@@ -273,21 +273,27 @@ __global__ void {op_name}(const __half* a, const float* b, __half* out, int n) {
 
 
 def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
-    """Fused elementwise kernel with arbitrary number of float32 inputs."""
+    """
+    Fused elementwise kernel over an arbitrary number of float32 inputs.
+
+    The output size is the broadcast target — the largest input. Broadcast
+    operands are expected to be indexed in ``expr`` (e.g. ``x1[idx % 256]``);
+    a grid-stride loop keeps the launch valid for any element count.
+    """
     if cuda is None:
         raise RuntimeError("GPU not available: cannot launch kernels")
     assert all(t.on_gpu for t in inputs), "All inputs must be on GPU"
-    n = inputs[0].size
-    for t in inputs:
-        assert t.size == n, "All inputs must have same size"
+    n = max(t.size for t in inputs)
+    big = max(inputs, key=lambda t: t.size)
 
     params = ", ".join(
         [f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"]
     )
     kernel_src = f"""
     __global__ void {op_name}({params}) {{
-        int idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx < n) {{
+        for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+             idx < n;
+             idx += blockDim.x * gridDim.x) {{
             out[idx] = {expr};
         }}
     }}
@@ -296,13 +302,17 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     out_gpu = mempool.alloc(n * 4)
     bs = _optimal_block_size()
     block = (bs, 1, 1)
-    grid = ((n + bs - 1) // bs, 1, 1)
+    grid = (min((n + bs - 1) // bs, 65535), 1, 1)
     args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n)]
     stream = _get_stream()
     func(*args, block=block, grid=grid, stream=stream)
     from importlib import import_module
     Tensor = getattr(import_module("novax.core"), "Tensor")
-    return Tensor(out_gpu, gpu=True, inputs=inputs)
+    result = Tensor(out_gpu, gpu=True, inputs=inputs)
+    result.shape = big.shape
+    result.size = n
+    result.dtype = np.float32
+    return result
 
 
 def launch_broadcast_binary(big, small, op_symbol: str, small_is_left: bool,
