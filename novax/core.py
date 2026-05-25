@@ -88,6 +88,7 @@ class Tensor:
         self.op = op
         self.inputs = inputs or []
         self.is_leaf = op is None
+        self._fuse_cache = None   # T2: memoized _fuse_template result
 
         # --- device state ---
         self.gpu_ptr = None
@@ -315,6 +316,8 @@ class Tensor:
         known. Constants are folded inline; non-fusable nodes (matmul,
         reductions, softmax) and true leaves become placeholders.
         """
+        if self._fuse_cache is not None:
+            return self._fuse_cache
         leaves = []
         index_map = {}
 
@@ -338,7 +341,9 @@ class Tensor:
                 return self._FUSE_UNARY_CUDA[op].format(e=build(node.inputs[0]))
             return f"__L{leaf_slot(node)}__"
 
-        return build(self), leaves
+        result = build(self), leaves
+        self._fuse_cache = result
+        return result
 
     def _try_full_fuse(self):
         """
@@ -696,6 +701,8 @@ class Tensor:
 
     def free(self, release=False):
         """Return GPU buffer to pool. Set release=True to free to CUDA driver."""
+        if getattr(self, 'pinned', False):
+            return  # memory owned by CUDA graph cache — do not pool
         if self.on_gpu and self.gpu_ptr is not None:
             try:
                 mempool.free(self.gpu_ptr, self.size * 4, release=release)

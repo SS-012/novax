@@ -1,3 +1,4 @@
+import re
 import numpy as np
 try:
     import pycuda.driver as cuda
@@ -11,6 +12,21 @@ if TYPE_CHECKING:
 from novax.utils import mempool
 
 _kernel_cache = {}
+_graph_replay_cache = {}   # T4: (expr_hash, n, ptr_tuple) → _GraphReplay
+
+
+class _GraphReplay:
+    """Cached CUDA Graph entry for a fused kernel with stable input pointers."""
+    __slots__ = ("graph_exec", "cap_stream", "out_ptr", "shape", "size")
+
+    def __init__(self, graph_exec, cap_stream, out_ptr, shape, size):
+        self.graph_exec = graph_exec
+        self.cap_stream = cap_stream
+        self.out_ptr = out_ptr
+        self.shape = shape
+        self.size = size
+
+
 _stream = None
 _stream_initialized = False   # True once we've resolved _stream (cached)
 _CAPTURE_STREAM = None         # non-None during CUDAGraph capture
@@ -272,24 +288,12 @@ __global__ void {op_name}(const __half* a, const float* b, __half* out, int n) {
     return result
 
 
-def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
-    """
-    Fused elementwise kernel over an arbitrary number of float32 inputs.
-
-    The output size is the broadcast target — the largest input. Broadcast
-    operands are expected to be indexed in ``expr`` (e.g. ``x1[idx % 256]``);
-    a grid-stride loop keeps the launch valid for any element count.
-    """
-    if cuda is None:
-        raise RuntimeError("GPU not available: cannot launch kernels")
-    assert all(t.on_gpu for t in inputs), "All inputs must be on GPU"
-    n = max(t.size for t in inputs)
-    big = max(inputs, key=lambda t: t.size)
-
+def _build_fused_scalar_src(op_name: str, n_inputs: int, expr: str) -> str:
+    """Grid-stride scalar elementwise kernel source."""
     params = ", ".join(
-        [f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"]
+        [f"const float* x{i}" for i in range(n_inputs)] + ["float* out", "int n"]
     )
-    kernel_src = f"""
+    return f"""
     __global__ void {op_name}({params}) {{
         for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
              idx < n;
@@ -298,12 +302,124 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
         }}
     }}
     """
-    func = get_kernel(op_name, kernel_src)
+
+
+def _build_fused_v4_src(op_name: str, n_inputs: int, expr: str) -> str:
+    """float4-vectorized fused kernel source (only valid when all inputs are same size)."""
+    params = ", ".join(
+        [f"const float* x{i}" for i in range(n_inputs)] + ["float* out", "int n4"]
+    )
+    loads = "\n            ".join(
+        f"float4 v{i} = ((const float4*)x{i})[i];" for i in range(n_inputs)
+    )
+    expr_parts = []
+    for c in ('x', 'y', 'z', 'w'):
+        e = expr
+        for i in range(n_inputs):
+            e = re.sub(r'x' + str(i) + r'\[idx\]', f'v{i}.{c}', e)
+        expr_parts.append(e)
+    return f"""
+    __global__ void {op_name}({params}) {{
+        for (int i = blockIdx.x * blockDim.x + threadIdx.x;
+             i < n4;
+             i += blockDim.x * gridDim.x) {{
+            {loads}
+            float4 vout;
+            vout.x = {expr_parts[0]};
+            vout.y = {expr_parts[1]};
+            vout.z = {expr_parts[2]};
+            vout.w = {expr_parts[3]};
+            ((float4*)out)[i] = vout;
+        }}
+    }}
+    """
+
+
+def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
+    """
+    Fused elementwise kernel over an arbitrary number of float32 inputs.
+
+    Automatically:
+    - Uses float4 vectorized loads when all inputs share the same size and n%4==0
+      (T2: up to ~2× on memory-bound ops).
+    - Captures a CUDA Graph on first call and replays on repeated calls with
+      identical input pointers (T4: near-zero CPU overhead on the hot path).
+    - Falls back to a plain grid-stride launch when inside a manual CUDAGraph
+      capture block or when CUDA Graphs are unavailable.
+    """
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    assert all(t.on_gpu for t in inputs), "All inputs must be on GPU"
+    n = max(t.size for t in inputs)
+    big = max(inputs, key=lambda t: t.size)
+
+    # T2: float4 vectorized path — only when every input is the same full size.
+    all_same = all(t.size == n for t in inputs)
+    use_vec4 = (all_same and n % 4 == 0
+                and all(getattr(t, 'dtype', np.float32) == np.float32 for t in inputs))
+    actual_name = (op_name + "_v4") if use_vec4 else op_name
+
+    # T4: CUDA Graph auto-capture / replay (skip if inside a manual capture).
+    if _CAPTURE_STREAM is None:
+        ptr_tuple = tuple(int(t.gpu_ptr) for t in inputs)
+        cache_key = (hash((actual_name, expr)), n, ptr_tuple)
+        entry = _graph_replay_cache.get(cache_key)
+        if entry is not None:
+            entry.graph_exec.launch(entry.cap_stream)
+            entry.cap_stream.synchronize()
+            from importlib import import_module
+            Tensor = getattr(import_module("novax.core"), "Tensor")
+            result = Tensor(entry.out_ptr, gpu=True, inputs=inputs)
+            result.shape = entry.shape
+            result.size = entry.size
+            result.dtype = np.float32
+            result.pinned = True   # memory owned by graph cache
+            return result
+
+        # First call: compile kernel, capture into a CUDA Graph, execute once.
+        kernel_src = (_build_fused_v4_src(actual_name, len(inputs), expr)
+                      if use_vec4
+                      else _build_fused_scalar_src(actual_name, len(inputs), expr))
+        func = get_kernel(actual_name, kernel_src)
+        n_elems = (n // 4) if use_vec4 else n
+        out_gpu = cuda.mem_alloc(n * 4)   # stable allocation outside the pool
+        bs = _optimal_block_size()
+        block = (bs, 1, 1)
+        grid = (min((n_elems + bs - 1) // bs, 65535), 1, 1)
+        args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n_elems)]
+        try:
+            cap_stream = cuda.Stream()
+            cap_stream.begin_capture()
+            func(*args, block=block, grid=grid, stream=cap_stream)
+            graph_obj = cap_stream.end_capture()
+            graph_exec = graph_obj.instantiate()
+            graph_exec.launch(cap_stream)
+            cap_stream.synchronize()
+            _graph_replay_cache[cache_key] = _GraphReplay(
+                graph_exec, cap_stream, out_gpu, big.shape, n)
+            from importlib import import_module
+            Tensor = getattr(import_module("novax.core"), "Tensor")
+            result = Tensor(out_gpu, gpu=True, inputs=inputs)
+            result.shape = big.shape
+            result.size = n
+            result.dtype = np.float32
+            result.pinned = True
+            return result
+        except Exception:
+            pass   # CUDA Graphs unavailable — fall through to normal launch
+
+    # Normal launch: used when inside a manual CUDAGraph capture or when the
+    # auto-capture above failed (e.g. PyCUDA too old / CUDA < 10).
+    kernel_src = (_build_fused_v4_src(actual_name, len(inputs), expr)
+                  if use_vec4
+                  else _build_fused_scalar_src(actual_name, len(inputs), expr))
+    func = get_kernel(actual_name, kernel_src)
+    n_elems = (n // 4) if use_vec4 else n
     out_gpu = mempool.alloc(n * 4)
     bs = _optimal_block_size()
     block = (bs, 1, 1)
-    grid = (min((n + bs - 1) // bs, 65535), 1, 1)
-    args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n)]
+    grid = (min((n_elems + bs - 1) // bs, 65535), 1, 1)
+    args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n_elems)]
     stream = _get_stream()
     func(*args, block=block, grid=grid, stream=stream)
     from importlib import import_module
@@ -359,76 +475,85 @@ def launch_broadcast_binary(big, small, op_symbol: str, small_is_left: bool,
 
 
 def launch_reduce(a, op_name: str, reduce_type: str):
-    """Two-pass parallel reduction. Always returns a float32 scalar tensor."""
+    """
+    Two-pass parallel reduction using warp-shuffle instructions.
+
+    Uses a grid-stride loop for the load phase (one kernel regardless of input
+    size) and ``__shfl_down_sync`` for intra-warp communication, which avoids
+    shared-memory bank conflicts and removes most ``__syncthreads`` calls vs the
+    old tree-reduction approach. Always returns a float32 scalar Tensor.
+    """
     if cuda is None:
         raise RuntimeError("GPU not available: cannot launch kernels")
     assert a.on_gpu, "Input tensor must be on GPU"
 
-    # If input is fp16, upcast to float32 first via a conversion kernel
     if getattr(a, 'dtype', np.float32) == np.float16:
         a = _fp16_to_fp32(a)
 
     if reduce_type == "sum":
         init_val = "0.0f"
-        reduce_op = "smem[tid] += smem[tid + stride];"
+        accum = "val += in[i];"
+        shfl_red = "val += __shfl_down_sync(0xffffffff, val, offset);"
     elif reduce_type == "max":
         init_val = "-3.402823e+38f"
-        reduce_op = "smem[tid] = fmaxf(smem[tid], smem[tid + stride]);"
+        accum = "val = fmaxf(val, in[i]);"
+        shfl_red = "val = fmaxf(val, __shfl_down_sync(0xffffffff, val, offset));"
     elif reduce_type == "min":
         init_val = "3.402823e+38f"
-        reduce_op = "smem[tid] = fminf(smem[tid], smem[tid + stride]);"
+        accum = "val = fminf(val, in[i]);"
+        shfl_red = "val = fminf(val, __shfl_down_sync(0xffffffff, val, offset));"
     else:
         raise ValueError(f"Unknown reduce_type: {reduce_type}")
 
     BS = 256
+    N_WARPS = BS // 32   # 8 warps per block
+
     kernel_src = f"""
     __global__ void {op_name}(const float* in, float* out, int n) {{
-        extern __shared__ float smem[];
-        int tid = threadIdx.x;
-        int idx = blockIdx.x * blockDim.x + tid;
-        smem[tid] = (idx < n) ? in[idx] : {init_val};
-        __syncthreads();
-        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {{
-            if (tid < stride) {{
-                {reduce_op}
-            }}
-            __syncthreads();
+        float val = {init_val};
+        // Grid-stride accumulation — each thread covers multiple elements.
+        for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {{
+            {accum}
         }}
-        if (tid == 0) out[blockIdx.x] = smem[0];
+        // Warp-level reduction via shuffle (no __syncthreads inside a warp).
+        for (int offset = 16; offset > 0; offset >>= 1) {{
+            {shfl_red}
+        }}
+        // Collect one value per warp in shared memory.
+        __shared__ float warp_sums[{N_WARPS}];
+        int lane    = threadIdx.x & 31;
+        int warp_id = threadIdx.x >> 5;
+        if (lane == 0) warp_sums[warp_id] = val;
+        __syncthreads();
+        // Final reduction across warps — run entirely in warp 0.
+        if (warp_id == 0) {{
+            val = (lane < {N_WARPS}) ? warp_sums[lane] : {init_val};
+            for (int offset = 16; offset > 0; offset >>= 1) {{
+                {shfl_red}
+            }}
+            if (lane == 0) out[blockIdx.x] = val;
+        }}
     }}
     """
 
     n = a.size
-    grid_size = (n + BS - 1) // BS
+    grid_size = min((n + BS - 1) // BS, 1024)
     partial_gpu = mempool.alloc(grid_size * 4)
     func = get_kernel(op_name, kernel_src)
     stream = _get_stream()
     func(a.gpu_ptr, partial_gpu, np.int32(n),
-         block=(BS, 1, 1), grid=(grid_size, 1, 1),
-         shared=BS * 4, stream=stream)
+         block=(BS, 1, 1), grid=(grid_size, 1, 1), stream=stream)
 
     if grid_size == 1:
         final_gpu = partial_gpu
     else:
-        final_gpu = mempool.alloc(4)
-        func2_name = op_name + "_pass2"
+        # Second pass: reduce at most 1024 block-partial values → 1 scalar.
+        func2_name = op_name + "_p2"
         func2_src = kernel_src.replace(op_name, func2_name)
         func2 = get_kernel(func2_name, func2_src)
-        grid2 = (grid_size + BS - 1) // BS
-        partial2_gpu = mempool.alloc(grid2 * 4)
-        func2(partial_gpu, partial2_gpu, np.int32(grid_size),
-              block=(BS, 1, 1), grid=(grid2, 1, 1),
-              shared=BS * 4, stream=stream)
-        if grid2 == 1:
-            final_gpu = partial2_gpu
-        else:
-            func3_name = op_name + "_pass3"
-            func3_src = kernel_src.replace(op_name, func3_name)
-            func3 = get_kernel(func3_name, func3_src)
-            final_gpu = mempool.alloc(4)
-            func3(partial2_gpu, final_gpu, np.int32(grid2),
-                  block=(BS, 1, 1), grid=(1, 1, 1),
-                  shared=BS * 4, stream=stream)
+        final_gpu = mempool.alloc(4)
+        func2(partial_gpu, final_gpu, np.int32(grid_size),
+              block=(BS, 1, 1), grid=(1, 1, 1), stream=stream)
 
     from importlib import import_module
     Tensor = getattr(import_module("novax.core"), "Tensor")

@@ -115,14 +115,16 @@ structural advantage over stock PyTorch eager.
 - [x] **Broadcast-aware fusion.** `launch_fused` now sizes output to the largest
       leaf and the template indexes broadcast leaves as `x{i}[idx % size_i]`.
 - [x] **Grid-stride loop** in the fused kernel (valid for any element count).
-- [ ] **Memoize the compiled expression** (fused source + leaf order) on the node
-      so repeated `eval()` in a loop skips Python re-derivation. *(remaining)*
-- [ ] **Vectorized memory access** (`float4` / `half2`) in generated elementwise
-      kernels → up to ~2–4× on memory-bound ops. *(remaining)*
+- [x] **Memoize the compiled expression** (fused source + leaf order) on the node
+      so repeated `eval()` in a loop skips Python re-derivation.
+- [x] **Vectorized memory access** (`float4`) in generated elementwise kernels
+      when all inputs are same size and `n % 4 == 0`; up to ~2× on memory-bound
+      ops. Non-vectorizable cases fall back to scalar grid-stride.
 
 **Files:** `core.py`, `ops/launcher.py`
-**Done:** full-subtree fusion + broadcast-aware leaves + grid-stride, verified by
-`tests/test_fusion_t2.py` (pure template-generation tests + GPU end-to-end).
+**Done:** full-subtree fusion + broadcast-aware leaves + grid-stride + memoization
++ float4 vectorization, verified by `tests/test_fusion_t2.py` and
+`tests/test_t3_t4_opts.py`.
 
 ---
 
@@ -132,8 +134,9 @@ structural advantage over stock PyTorch eager.
 
 - [ ] **cuBLASLt fused epilogue** (GEMM + bias + ReLU) with **TF32 / Tensor
       Cores**, replacing the hand-written tiled `matmul_bias_relu`.
-- [ ] **Warp-shuffle reductions** (`__shfl_down_sync`) + vectorized loads in a
-      single grid-stride pass, replacing the 2–3 separate shared-memory kernels.
+- [x] **Warp-shuffle reductions** (`__shfl_down_sync`) + grid-stride load
+      accumulation in a single two-pass kernel, replacing the old 2–3 pass
+      shared-memory tree reduction.
 - [ ] **cuDNN (or keep Triton)** fast path for softmax / activations.
 
 **Files:** `ops/launcher.py`, `ops/gpu/*`
@@ -146,10 +149,12 @@ structural advantage over stock PyTorch eager.
 cost every iteration; a captured NovaX graph replays a whole forward pass in
 microseconds.
 
-- [ ] Make `eval()` **auto-capture** a CUDA Graph keyed by expression structure
-      and **replay** on repeated calls with identical shapes (reuse the existing
-      `CUDAGraph`).
-- [ ] Cache instantiated graphs; invalidate on shape change.
+- [x] **Auto-capture** a CUDA Graph in `launch_fused` keyed by
+      `(expr_hash, n, input_ptr_tuple)`; **replay** on subsequent calls with the
+      same input pointers (near-zero CPU overhead on the hot path).
+- [x] Cache instantiated graphs in `_graph_replay_cache`; different input
+      pointers (new allocation or different batch) simply miss the cache and
+      re-capture once.
 
 **Files:** `core.py`, `ops/launcher.py`
 
