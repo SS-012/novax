@@ -227,15 +227,18 @@ class TestCUDAGraphReplay:
         np.testing.assert_array_almost_equal(r2, ref, decimal=4)
         np.testing.assert_array_almost_equal(r3, ref, decimal=4)
 
-    def test_graph_cache_populated(self):
-        from novax.ops.launcher import _graph_replay_cache
-        before = len(_graph_replay_cache)
+    def test_repeated_fused_eval_stable(self):
+        """Repeated fused eval with stable input pointers yields identical results."""
         np.random.seed(12)
-        a = Tensor(np.random.randn(1024).astype(np.float32)).to_gpu()
-        b = Tensor(np.random.randn(1024).astype(np.float32)).to_gpu()
-        nx.relu(a * b).eval()
-        # Cache may grow if CUDA Graphs are supported; it must never shrink.
-        assert len(_graph_replay_cache) >= before
+        a_np = np.random.randn(1024).astype(np.float32)
+        b_np = np.random.randn(1024).astype(np.float32)
+        a = Tensor(a_np).to_gpu()
+        b = Tensor(b_np).to_gpu()
+        ref = np.maximum(0.0, a_np * b_np)
+        r1 = nx.relu(a * b).eval().to_host()
+        r2 = nx.relu(a * b).eval().to_host()
+        np.testing.assert_array_almost_equal(r1, ref, decimal=4)
+        np.testing.assert_array_equal(r1, r2)
 
     def test_mlp_forward_repeated(self):
         """Three consecutive MLP forward passes produce the same scalar loss."""

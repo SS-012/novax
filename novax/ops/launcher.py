@@ -12,20 +12,6 @@ if TYPE_CHECKING:
 from novax.utils import mempool
 
 _kernel_cache = {}
-_graph_replay_cache = {}   # T4: (expr_hash, n, ptr_tuple) → _GraphReplay
-
-
-class _GraphReplay:
-    """Cached CUDA Graph entry for a fused kernel with stable input pointers."""
-    __slots__ = ("graph_exec", "cap_stream", "out_ptr", "shape", "size")
-
-    def __init__(self, graph_exec, cap_stream, out_ptr, shape, size):
-        self.graph_exec = graph_exec
-        self.cap_stream = cap_stream
-        self.out_ptr = out_ptr
-        self.shape = shape
-        self.size = size
-
 
 _stream = None
 _stream_initialized = False   # True once we've resolved _stream (cached)
@@ -418,13 +404,17 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     """
     Fused elementwise kernel over an arbitrary number of float32 inputs.
 
-    Automatically:
-    - Uses float4 vectorized loads when all inputs share the same size and n%4==0
-      (T2: up to ~2× on memory-bound ops).
-    - Captures a CUDA Graph on first call and replays on repeated calls with
-      identical input pointers (T4: near-zero CPU overhead on the hot path).
-    - Falls back to a plain grid-stride launch when inside a manual CUDAGraph
-      capture block or when CUDA Graphs are unavailable.
+    - Uses float4 vectorized loads when all inputs share the same size and
+      n % 4 == 0 (T2: up to ~2× on memory-bound ops).
+    - Otherwise a scalar grid-stride kernel handles any element count.
+
+    The launch is fully async on the current stream (no per-op synchronize).
+    Whole-graph capture/replay — the path that actually beats eager dispatch —
+    is provided explicitly via ``CUDAGraph.capture(fn)``; per-kernel
+    auto-capture is intentionally *not* done here because, with a fresh output
+    buffer every call, it would re-capture and re-instantiate a graph (plus an
+    unpooled device allocation) on every launch — strictly slower than a plain
+    launch for the common case.
     """
     if cuda is None:
         raise RuntimeError("GPU not available: cannot launch kernels")
@@ -438,55 +428,6 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
                 and all(getattr(t, 'dtype', np.float32) == np.float32 for t in inputs))
     actual_name = (op_name + "_v4") if use_vec4 else op_name
 
-    # T4: CUDA Graph auto-capture / replay (skip if inside a manual capture).
-    if _CAPTURE_STREAM is None:
-        ptr_tuple = tuple(int(t.gpu_ptr) for t in inputs)
-        cache_key = (hash((actual_name, expr)), n, ptr_tuple)
-        entry = _graph_replay_cache.get(cache_key)
-        if entry is not None:
-            entry.graph_exec.launch(entry.cap_stream)
-            entry.cap_stream.synchronize()
-            Tensor = _tensor_cls()
-            result = Tensor(entry.out_ptr, gpu=True, inputs=inputs)
-            result.shape = entry.shape
-            result.size = entry.size
-            result.dtype = np.float32
-            result.pinned = True   # memory owned by graph cache
-            return result
-
-        # First call: compile kernel, capture into a CUDA Graph, execute once.
-        kernel_src = (_build_fused_v4_src(actual_name, len(inputs), expr)
-                      if use_vec4
-                      else _build_fused_scalar_src(actual_name, len(inputs), expr))
-        func = get_kernel(actual_name, kernel_src)
-        n_elems = (n // 4) if use_vec4 else n
-        out_gpu = cuda.mem_alloc(n * 4)   # stable allocation outside the pool
-        bs = _optimal_block_size()
-        block = (bs, 1, 1)
-        grid = (min((n_elems + bs - 1) // bs, 65535), 1, 1)
-        args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n_elems)]
-        try:
-            cap_stream = cuda.Stream()
-            cap_stream.begin_capture()
-            func(*args, block=block, grid=grid, stream=cap_stream)
-            graph_obj = cap_stream.end_capture()
-            graph_exec = graph_obj.instantiate()
-            graph_exec.launch(cap_stream)
-            cap_stream.synchronize()
-            _graph_replay_cache[cache_key] = _GraphReplay(
-                graph_exec, cap_stream, out_gpu, big.shape, n)
-            Tensor = _tensor_cls()
-            result = Tensor(out_gpu, gpu=True, inputs=inputs)
-            result.shape = big.shape
-            result.size = n
-            result.dtype = np.float32
-            result.pinned = True
-            return result
-        except Exception:
-            pass   # CUDA Graphs unavailable — fall through to normal launch
-
-    # Normal launch: used when inside a manual CUDAGraph capture or when the
-    # auto-capture above failed (e.g. PyCUDA too old / CUDA < 10).
     kernel_src = (_build_fused_v4_src(actual_name, len(inputs), expr)
                   if use_vec4
                   else _build_fused_scalar_src(actual_name, len(inputs), expr))

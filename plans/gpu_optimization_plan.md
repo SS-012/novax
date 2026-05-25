@@ -157,17 +157,20 @@ structural advantage over stock PyTorch eager.
 cost every iteration; a captured NovaX graph replays a whole forward pass in
 microseconds.
 
-- [x] **Per-kernel auto-capture** in `launch_fused` keyed by
-      `(expr_hash, n, input_ptr_tuple)`; **replay** on subsequent calls with the
-      same input pointers (removes the kernel-launch driver cost on the hot path).
-- [x] Cache instantiated graphs in `_graph_replay_cache`; different input
-      pointers (new allocation or different batch) miss the cache and re-capture.
+- [x] ~~**Per-kernel auto-capture** in `launch_fused`~~ — **reverted.** A fresh
+      output buffer is allocated every `eval()`, so the per-kernel cache (keyed on
+      input pointers) re-captured + re-instantiated a graph *and* did an unpooled
+      `cuda.mem_alloc` on every call. Benchmarking showed this was a net
+      regression that scaled with `n` (≈5–6× slower at 10M elements) — the cost
+      of the per-call driver allocation, not faster kernels. `launch_fused` is now
+      a clean pooled float4/grid-stride launch, fully async on the stream.
 - [x] **Whole-graph capture** via `CUDAGraph.capture(fn)`: warms the kernel /
       cuBLAS caches, pre-seeds the memory pool (CUDA forbids `cuMemAlloc` during
       capture), then captures the *entire* forward pass — every kernel **and**
       cuBLAS GEMM — into one graph. `replay()` is a single launch with **zero
       per-op Python**, and falls back to re-running `fn` if capture is
-      unsupported. This is the structural win over PyTorch eager.
+      unsupported. This is the correct structural win over PyTorch eager — and,
+      unlike per-kernel capture, it amortises the capture cost over many replays.
 
 **Why explicit, not transparent `eval()`-level capture:** the eager benchmark
 rebuilds the lazy graph every iteration, so a transparent cache would still pay
