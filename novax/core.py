@@ -709,18 +709,40 @@ class Tensor:
     # Memory management & context manager
     # ------------------------------------------------------------------
 
+    def _nbytes(self) -> int:
+        """Byte size of this tensor's GPU buffer (dtype-aware)."""
+        elem = 2 if getattr(self, 'dtype', np.float32) == np.float16 else 4
+        return (self.size or 0) * elem
+
     def free(self, release=False):
         """Return GPU buffer to pool. Set release=True to free to CUDA driver."""
         if getattr(self, 'pinned', False):
             return  # memory owned by CUDA graph cache — do not pool
         if self.on_gpu and self.gpu_ptr is not None:
             try:
-                mempool.free(self.gpu_ptr, self.size * 4, release=release)
+                mempool.free(self.gpu_ptr, self._nbytes(), release=release)
             except Exception:
                 pass
             finally:
                 self.gpu_ptr = None
                 self.on_gpu = False
+
+    def __del__(self):
+        # Recycle the GPU buffer into the caching pool on garbage collection so
+        # the next same-size allocation reuses it instead of paying a
+        # cudaMalloc/cudaFree round-trip — the per-op fixed cost PyTorch hides
+        # with its caching allocator. All NovaX ops share one CUDA stream, so a
+        # recycled buffer cannot be handed out again before the kernel that
+        # produced it has retired.
+        try:
+            if (getattr(self, 'on_gpu', False)
+                    and getattr(self, 'gpu_ptr', None) is not None
+                    and not getattr(self, 'pinned', False)
+                    and getattr(self, 'size', None)):
+                mempool.free(self.gpu_ptr, self._nbytes())
+                self.gpu_ptr = None
+        except Exception:
+            pass
 
     def release_context(self):
         if cuda and cuda.Context.get_current():

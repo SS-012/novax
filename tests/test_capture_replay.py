@@ -69,6 +69,61 @@ class TestMempoolRecording:
 
 
 # ---------------------------------------------------------------------------
+# Buffer recycling: __del__ returns GPU buffers to the caching pool
+# ---------------------------------------------------------------------------
+
+class TestBufferRecycling:
+    def test_del_recycles_gpu_buffer(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(mempool, "free",
+                            lambda ptr, nbytes, release=False: calls.append((ptr, nbytes)))
+        t = Tensor(np.zeros(8, dtype=np.float32))
+        # Pose as a GPU tensor holding a device buffer.
+        sentinel = object()
+        t.on_gpu = True
+        t.gpu_ptr = sentinel
+        t.size = 256
+        t.dtype = np.float32
+        t.__del__()
+        assert len(calls) == 1
+        assert calls[0][0] is sentinel
+        assert calls[0][1] == 256 * 4   # 1024 bytes
+        assert t.gpu_ptr is None         # buffer released from the tensor
+
+    def test_del_is_noop_for_cpu_tensor(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(mempool, "free",
+                            lambda *a, **k: calls.append(a))
+        t = Tensor(np.zeros(8, dtype=np.float32))   # CPU tensor
+        t.__del__()
+        assert calls == []
+
+    def test_del_skips_pinned_buffer(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(mempool, "free",
+                            lambda *a, **k: calls.append(a))
+        t = Tensor(np.zeros(8, dtype=np.float32))
+        t.on_gpu = True
+        t.gpu_ptr = object()
+        t.size = 16
+        t.pinned = True
+        t.__del__()
+        assert calls == []
+
+    def test_del_fp16_byte_size(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(mempool, "free",
+                            lambda ptr, nbytes, release=False: calls.append(nbytes))
+        t = Tensor(np.zeros(8, dtype=np.float32))
+        t.on_gpu = True
+        t.gpu_ptr = object()
+        t.size = 100
+        t.dtype = np.float16
+        t.__del__()
+        assert calls == [200]   # 100 elements * 2 bytes
+
+
+# ---------------------------------------------------------------------------
 # CUDAGraph fallback behaviour (no GPU)
 # ---------------------------------------------------------------------------
 

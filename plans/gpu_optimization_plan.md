@@ -87,17 +87,26 @@ re-run notebook cells 8 (MLP fwd) and 13 (inference) on GPU.
 **Why:** removes the flat 5–6× tax across elementwise / activations / reductions,
 and makes small matmul competitive. Cheapest, highest-leverage change.
 
-- [ ] **Cache device properties once.** `_optimal_block_size()` resolves the
+- [x] **Cache device properties once.** `_optimal_block_size()` resolves the
       block size a single time into a module global, then returns it directly.
-- [ ] **Cache the stream.** `_get_stream()` queries `Context.get_current()` only
+- [x] **Cache the stream.** `_get_stream()` queries `Context.get_current()` only
       until the stream is created, then returns the cached stream (capture stream
       still takes priority via a cheap global check).
-- [ ] **Persistent cuBLAS handle.** Create one handle lazily via
+- [x] **Persistent cuBLAS handle.** Create one handle lazily via
       `_get_cublas_handle()`, reuse across calls, set its stream per-call
       (`cublasSetStream`, cheap), destroy at exit. Removes create/destroy from the
       matmul hot path.
+- [x] **Caching allocator (buffer recycling).** `Tensor.__del__` returns the GPU
+      buffer to the bucketed pool on garbage collection, so a discarded `eval()`
+      result is reused by the next same-size allocation instead of triggering a
+      `cuMemAlloc`/`cuMemFree` round-trip. Benchmarks showed a per-op fixed cost
+      of ~200µs on medium/large buffers (4MB+) that scaled with allocation size,
+      not element count — the signature of driver alloc/free churn. This is the
+      mechanism PyTorch's caching allocator uses; recycling is safe because all
+      NovaX ops share one stream (a reused buffer's new kernel is serialised
+      after the kernel that produced it).
 
-**Files:** `ops/launcher.py`
+**Files:** `ops/launcher.py`, `core.py`
 **Verify:** existing suite stays green; re-benchmark — expect elementwise /
 activations / reductions to drop toward parity, small matmul to improve.
 
