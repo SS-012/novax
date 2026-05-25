@@ -26,6 +26,18 @@ _BINARY_OPS = frozenset({"add", "sub", "mul", "div", "pow"})
 # Roots eligible for whole-subtree fusion (softmax has its own multi-pass path).
 _FUSABLE_ROOTS = _BINARY_OPS | (_UNARY_ELEMENTWISE - {"softmax"})
 
+_grad_enabled_fn = None
+
+
+def _grad_enabled() -> bool:
+    """Cached accessor for autograd's grad-enabled flag (avoids per-eval import)."""
+    global _grad_enabled_fn
+    if _grad_enabled_fn is None:
+        from novax.autograd import _get_grad_enabled
+        _grad_enabled_fn = _get_grad_enabled
+    return _grad_enabled_fn()
+
+
 _UNARY_CUDA_EXPR = {
     "exp":     "expf(a[idx])",
     "log":     "logf(a[idx])",
@@ -387,8 +399,6 @@ class Tensor:
 
     def eval(self):
         """Compile and execute the expression graph, returning a concrete Tensor."""
-        from novax.autograd import _get_grad_enabled
-
         if self.is_leaf:
             return self
 
@@ -421,17 +431,17 @@ class Tensor:
 
         if self.op in _UNARY_ELEMENTWISE or self.op in _REDUCE_OPS:
             inp = self.inputs[0].eval()
-            return self._eval_unary(inp, _get_grad_enabled())
+            return self._eval_unary(inp, _grad_enabled())
 
         if self.op == "matmul":
             left = self.inputs[0].eval()
             right = self.inputs[1].eval()
-            return self._eval_matmul(left, right, _get_grad_enabled())
+            return self._eval_matmul(left, right, _grad_enabled())
 
         # Binary elementwise: add, sub, mul, div, pow
         left = self.inputs[0].eval()
         right = self.inputs[1].eval()
-        return self._eval_binary(left, right, _get_grad_enabled())
+        return self._eval_binary(left, right, _grad_enabled())
 
     def _eval_unary(self, inp, track_grad: bool):
         op = self.op

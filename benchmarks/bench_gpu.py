@@ -412,6 +412,8 @@ def pt_inf():
         return h @ W2_pt + b2_pt
 
 N_INF = 1000
+
+# --- (a) eager loop: rebuild + dispatch the graph every iteration ----------
 cuda.Context.synchronize()
 t0 = time.perf_counter()
 for _ in range(N_INF):
@@ -427,8 +429,28 @@ torch.cuda.synchronize()
 pt_total = (time.perf_counter() - t0) * 1000
 
 r, ind = ratio(nx_total / N_INF, pt_total / N_INF)
-print(f"{'1000× forward (per-pass avg)':<40} {nx_total/N_INF:>8.3f}ms {pt_total/N_INF:>8.3f}ms {r:>6.2f}x  {ind}")
+print(f"{'eager: 1000× fwd (per-pass avg)':<40} {nx_total/N_INF:>8.3f}ms {pt_total/N_INF:>8.3f}ms {r:>6.2f}x  {ind}")
 print(f"  Throughput: NovaX {N_INF/(nx_total/1000):.0f} fwd/s  |  PyTorch {N_INF/(pt_total/1000):.0f} fwd/s")
+
+# --- (b) captured replay: build once, replay the whole graph ---------------
+# This is NovaX's structural advantage — the entire forward pass becomes a
+# single graph launch with zero per-op Python. Compared against PyTorch EAGER
+# (the typical inference loop without torch.compile / CUDA graphs).
+graph = nx.CUDAGraph()
+graph.capture(nx_inf)          # warm + capture (no-op fallback if unsupported)
+for _ in range(WARMUP):
+    graph.replay()
+cuda.Context.synchronize()
+t0 = time.perf_counter()
+for _ in range(N_INF):
+    graph.replay()
+cuda.Context.synchronize()
+nx_cap_total = (time.perf_counter() - t0) * 1000
+
+r2, ind2 = ratio(nx_cap_total / N_INF, pt_total / N_INF)
+print(f"{'captured: 1000× fwd replay (avg)':<40} {nx_cap_total/N_INF:>8.3f}ms {pt_total/N_INF:>8.3f}ms {r2:>6.2f}x  {ind2}")
+print(f"  Throughput: NovaX {N_INF/(nx_cap_total/1000):.0f} fwd/s (captured)  |  PyTorch {N_INF/(pt_total/1000):.0f} fwd/s (eager)")
+print(f"  Speedup from capture/replay vs NovaX eager: {nx_total/nx_cap_total:.2f}×")
 print(SEP)
 
 # ---------------------------------------------------------------------------

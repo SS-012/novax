@@ -143,18 +143,49 @@ structural advantage over stock PyTorch eager.
 
 ---
 
-## Tier 4 — Beat PyTorch eager: auto CUDA-Graph capture
+## Tier 4 — Beat PyTorch eager: CUDA-Graph capture
 
 **Why:** the real path to *winning*. PyTorch eager pays per-op Python + dispatch
 cost every iteration; a captured NovaX graph replays a whole forward pass in
 microseconds.
 
-- [x] **Auto-capture** a CUDA Graph in `launch_fused` keyed by
+- [x] **Per-kernel auto-capture** in `launch_fused` keyed by
       `(expr_hash, n, input_ptr_tuple)`; **replay** on subsequent calls with the
-      same input pointers (near-zero CPU overhead on the hot path).
+      same input pointers (removes the kernel-launch driver cost on the hot path).
 - [x] Cache instantiated graphs in `_graph_replay_cache`; different input
-      pointers (new allocation or different batch) simply miss the cache and
-      re-capture once.
+      pointers (new allocation or different batch) miss the cache and re-capture.
+- [x] **Whole-graph capture** via `CUDAGraph.capture(fn)`: warms the kernel /
+      cuBLAS caches, pre-seeds the memory pool (CUDA forbids `cuMemAlloc` during
+      capture), then captures the *entire* forward pass — every kernel **and**
+      cuBLAS GEMM — into one graph. `replay()` is a single launch with **zero
+      per-op Python**, and falls back to re-running `fn` if capture is
+      unsupported. This is the structural win over PyTorch eager.
+
+**Why explicit, not transparent `eval()`-level capture:** the eager benchmark
+rebuilds the lazy graph every iteration, so a transparent cache would still pay
+the Python graph-rebuild + fingerprint cost each call, and hits the
+allocation-during-capture wall. The explicit `capture(fn)` API builds once and
+replays with no Python per op — the only form that actually beats C++ dispatch.
+
+**Files:** `ops/launcher.py`, `utils/mempool.py`, `benchmarks/bench_gpu.py`
+
+---
+
+## Tier 1.5 — Lower the Python dispatch floor
+
+**Why:** the benchmark scoreboard showed a flat ~45µs/op floor on small ops
+(time identical at n=10k and n=100k) — pure interpreter overhead, not kernel
+cost. PyTorch's C++ dispatch floor is ~25µs. We can narrow (not erase) the gap.
+
+- [x] **Hoist `import_module("novax.core")`** out of every launcher hot path
+      into a cached `_tensor_cls()` resolver (was re-run on *every* op launch).
+- [x] **Cache the grad-enabled accessor** (`_grad_enabled()` in `core.py`) so
+      `eval()` no longer executes `from novax.autograd import ...` per call.
+
+**Honest ceiling:** this trims the fixed floor but cannot beat compiled C++
+per-op dispatch latency from CPython. Single-op eager losses narrow; they do not
+flip. The win comes from amortization (fusion, captured replay), not from
+matching eager latency op-for-op.
 
 **Files:** `core.py`, `ops/launcher.py`
 

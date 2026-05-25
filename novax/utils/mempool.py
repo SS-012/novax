@@ -7,12 +7,48 @@ except Exception:
 # Allocations are rounded up to the next power of 2 so lookups are O(1).
 _pool: dict = {}
 
+# Capture support: CUDA forbids cuMemAlloc while a stream-capture is in flight,
+# so before capturing we run the computation once with recording on to learn
+# which buckets it needs, then pre-seed the pool so every capture-time alloc is
+# a pool hit (no driver allocation).
+_recording = False
+_record_buckets: list = []
+
 
 def _bucket(size: int) -> int:
     """Round size up to the next power of 2 (minimum 64 bytes)."""
     if size <= 64:
         return 64
     return 1 << (size - 1).bit_length()
+
+
+def begin_record():
+    """Start recording the bucket size of every alloc() (for capture pre-seed)."""
+    global _recording, _record_buckets
+    _recording = True
+    _record_buckets = []
+
+
+def end_record() -> list:
+    """Stop recording and return the list of bucket sizes that were requested."""
+    global _recording
+    _recording = False
+    return list(_record_buckets)
+
+
+def preseed(buckets) -> None:
+    """
+    Ensure the pool holds at least as many free buffers per bucket as `buckets`
+    requires, so a subsequent capture pass never calls cuda.mem_alloc.
+    """
+    if cuda is None:
+        return
+    from collections import Counter
+    need = Counter(buckets)
+    for b, count in need.items():
+        have = len(_pool.get(b, []))
+        for _ in range(max(0, count - have)):
+            _pool.setdefault(b, []).append(cuda.mem_alloc(b))
 
 
 def alloc(size: int):
@@ -23,6 +59,8 @@ def alloc(size: int):
     if cuda is None:
         raise RuntimeError("CUDA not available: cannot allocate GPU buffer")
     b = _bucket(size)
+    if _recording:
+        _record_buckets.append(b)
     bucket_list = _pool.get(b)
     if bucket_list:
         return bucket_list.pop()

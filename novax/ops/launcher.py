@@ -94,28 +94,54 @@ def get_kernel(name: str, src: str):
     return func
 
 
+_Tensor = None
+
+
+def _tensor_cls():
+    """Return the Tensor class, resolved once (avoids a per-launch import)."""
+    global _Tensor
+    if _Tensor is None:
+        from novax.core import Tensor
+        _Tensor = Tensor
+    return _Tensor
+
+
 # ---------------------------------------------------------------------------
 # Item 5: CUDA Graphs
 # ---------------------------------------------------------------------------
 
 class CUDAGraph:
     """
-    Captures a sequence of NovaX GPU kernel launches into a CUDA Graph,
-    then replays the whole sequence with near-zero CPU overhead.
+    Captures a whole NovaX forward pass (every kernel + cuBLAS call it issues)
+    into a single CUDA Graph, then replays the entire sequence with one launch
+    and zero per-op Python overhead.
 
-    Usage::
+    The recommended entry point is ``capture(fn)``, which warms the kernel/cuBLAS
+    caches and pre-seeds the memory pool before capturing (CUDA forbids device
+    allocation while a capture is in flight)::
 
         graph = nx.CUDAGraph()
-        with graph:
-            out = nx.relu(nx.matmul(x, W) + b).eval()   # captured, not timed
+        out = graph.capture(lambda: nx.relu(nx.matmul(x, W1) + b1).eval())
 
-        for step in range(10_000):
-            graph.replay()   # replays in ~microseconds
+        for _ in range(10_000):
+            graph.replay()          # one graph launch, no Python per op
+            result = out.to_host()  # `out` buffers are overwritten in place
+
+    If capture is unavailable (old PyCUDA / CUDA), ``capture`` records the
+    function and ``replay`` transparently falls back to re-running it, so calling
+    code stays correct either way.
+
+    The low-level ``with graph:`` form is still supported for callers that manage
+    pool warm-up themselves.
     """
 
     def __init__(self):
         self._graph_exec = None
         self._cap_stream = None
+        self._fn = None          # fallback path when capture is unavailable
+        self._out = None         # captured output tensor (buffers reused on replay)
+
+    # -- low-level context-manager capture (caller must pre-warm the pool) -----
 
     def __enter__(self):
         global _CAPTURE_STREAM
@@ -123,7 +149,6 @@ class CUDAGraph:
             raise RuntimeError("CUDAGraph requires PyCUDA (GPU not available)")
         self._cap_stream = cuda.Stream()
         _CAPTURE_STREAM = self._cap_stream
-        # begin_capture: try with mode arg first (CUDA 10+), then no-arg
         try:
             mode = 0   # cudaStreamCaptureModeRelaxed = 0
             self._cap_stream.begin_capture(mode)
@@ -151,12 +176,67 @@ class CUDAGraph:
         except Exception as e:
             raise RuntimeError(f"CUDAGraph instantiation failed: {e}")
 
+    # -- high-level capture: warm, pre-seed, then capture ----------------------
+
+    def capture(self, fn):
+        """
+        Capture ``fn`` (a zero-arg callable that returns a concrete GPU Tensor)
+        into a replayable CUDA Graph. Returns the output Tensor; its device
+        buffers are overwritten in place on every ``replay()``.
+        """
+        if cuda is None:
+            raise RuntimeError("CUDAGraph requires PyCUDA (GPU not available)")
+        self._fn = fn
+
+        # Pass 1 — warm up: compile kernels, initialise cuBLAS, and record which
+        # pool buckets the computation needs (so capture-time allocs all hit).
+        mempool.begin_record()
+        try:
+            fn()
+        finally:
+            buckets = mempool.end_record()
+        try:
+            mempool.preseed(buckets)
+        except Exception:
+            pass
+
+        # Pass 2 — capture.
+        global _CAPTURE_STREAM
+        self._cap_stream = cuda.Stream()
+        _CAPTURE_STREAM = self._cap_stream
+        try:
+            try:
+                self._cap_stream.begin_capture(0)
+            except TypeError:
+                self._cap_stream.begin_capture()
+            self._out = fn()
+            graph = self._cap_stream.end_capture()
+            self._graph_exec = graph.instantiate()
+        except Exception:
+            # Capture unsupported / illegal op mid-capture — fall back cleanly.
+            self._graph_exec = None
+            self._out = None
+        finally:
+            _CAPTURE_STREAM = None
+
+        # If capture failed, run once more outside capture for a valid result.
+        if self._out is None:
+            self._out = fn()
+        return self._out
+
     def replay(self):
-        """Re-execute the captured graph. Near-zero Python and driver overhead."""
-        if self._graph_exec is None:
-            raise RuntimeError("No graph captured. Use 'with graph:' block first.")
-        self._graph_exec.launch(self._cap_stream)
-        self._cap_stream.synchronize()
+        """
+        Re-execute the captured graph (one launch, no per-op Python). Falls back
+        to re-running the recorded function when no graph was captured.
+        """
+        if self._graph_exec is not None:
+            self._graph_exec.launch(self._cap_stream)
+            self._cap_stream.synchronize()
+            return self._out
+        if self._fn is not None:
+            self._out = self._fn()
+            return self._out
+        raise RuntimeError("No graph captured. Call capture(fn) or use 'with graph:'.")
 
 
 # ---------------------------------------------------------------------------
@@ -281,8 +361,7 @@ __global__ void {op_name}(const __half* a, const float* b, __half* out, int n) {
         func(a.gpu_ptr, b.gpu_ptr, out_gpu, np.int32(n),
              block=block, grid=grid, stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[a, b] if b else [a])
     result.dtype = dtype
     return result
@@ -367,8 +446,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
         if entry is not None:
             entry.graph_exec.launch(entry.cap_stream)
             entry.cap_stream.synchronize()
-            from importlib import import_module
-            Tensor = getattr(import_module("novax.core"), "Tensor")
+            Tensor = _tensor_cls()
             result = Tensor(entry.out_ptr, gpu=True, inputs=inputs)
             result.shape = entry.shape
             result.size = entry.size
@@ -397,8 +475,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
             cap_stream.synchronize()
             _graph_replay_cache[cache_key] = _GraphReplay(
                 graph_exec, cap_stream, out_gpu, big.shape, n)
-            from importlib import import_module
-            Tensor = getattr(import_module("novax.core"), "Tensor")
+            Tensor = _tensor_cls()
             result = Tensor(out_gpu, gpu=True, inputs=inputs)
             result.shape = big.shape
             result.size = n
@@ -422,8 +499,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n_elems)]
     stream = _get_stream()
     func(*args, block=block, grid=grid, stream=stream)
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=inputs)
     result.shape = big.shape
     result.size = n
@@ -465,8 +541,7 @@ def launch_broadcast_binary(big, small, op_symbol: str, small_is_left: bool,
     func(big.gpu_ptr, small.gpu_ptr, out_gpu, np.int32(n), np.int32(m),
          block=block, grid=grid, stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[big, small])
     result.shape = big.shape
     result.size = n
@@ -555,8 +630,7 @@ def launch_reduce(a, op_name: str, reduce_type: str):
         func2(partial_gpu, final_gpu, np.int32(grid_size),
               block=(BS, 1, 1), grid=(1, 1, 1), stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _tensor_cls()
     result = Tensor(final_gpu, gpu=True, inputs=[a])
     result.shape = (1,)
     result.size = 1
@@ -580,8 +654,7 @@ __global__ void fp16_to_fp32(const __half* in, float* out, int n) {
     func(a.gpu_ptr, out_gpu, np.int32(n),
          block=(bs, 1, 1), grid=((n + bs - 1) // bs, 1, 1),
          stream=_get_stream())
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[a])
     result.shape = a.shape
     result.size = n
@@ -662,8 +735,7 @@ def _launch_matmul_cublas(a, b):
             out_gpu, N,
         )
 
-        from importlib import import_module
-        Tensor = getattr(import_module("novax.core"), "Tensor")
+        Tensor = _tensor_cls()
         result = Tensor(out_gpu, gpu=True, inputs=[a, b])
         result.shape = (M, N)
         result.size = M * N
@@ -712,8 +784,7 @@ def _launch_matmul_tiled(a, b):
          np.int32(M), np.int32(K), np.int32(N),
          block=block, grid=grid, stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[a, b])
     result.shape = (M, N)
     result.size = M * N
@@ -792,8 +863,7 @@ def launch_matmul_bias(x, w, bias):
          np.int32(M), np.int32(K), np.int32(N),
          block=block, grid=grid, stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
     result.shape = (M, N)
     result.size = M * N
@@ -851,8 +921,7 @@ def launch_matmul_bias_relu(x, w, bias):
          np.int32(M), np.int32(K), np.int32(N),
          block=block, grid=grid, stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
     result.shape = (M, N)
     result.size = M * N
