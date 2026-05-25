@@ -12,14 +12,22 @@ from novax.utils import mempool
 
 _kernel_cache = {}
 _stream = None
-_CAPTURE_STREAM = None   # non-None during CUDAGraph capture
+_stream_initialized = False   # True once we've resolved _stream (cached)
+_CAPTURE_STREAM = None         # non-None during CUDAGraph capture
+_BLOCK_SIZE = None             # cached optimal block size (device query is costly)
 
 
 def _get_stream():
-    """Return the active CUDA stream (capture stream takes priority)."""
-    global _stream
+    """Return the active CUDA stream (capture stream takes priority).
+
+    The default stream is resolved once and cached; subsequent calls avoid the
+    per-launch ``Context.get_current()`` driver round-trip.
+    """
     if _CAPTURE_STREAM is not None:
         return _CAPTURE_STREAM
+    global _stream, _stream_initialized
+    if _stream_initialized:
+        return _stream
     if cuda is None:
         return None
     try:
@@ -27,16 +35,20 @@ def _get_stream():
     except Exception:
         ctx = None
     if ctx is None:
-        return None
-    if _stream is None:
-        try:
-            _stream = cuda.Stream()
-        except Exception:
-            _stream = None
+        return None   # no context yet → retry on a later call
+    try:
+        _stream = cuda.Stream()
+    except Exception:
+        _stream = None
+    _stream_initialized = True
     return _stream
 
 
 def _optimal_block_size() -> int:
+    """Return the launch block size, querying the device only once."""
+    global _BLOCK_SIZE
+    if _BLOCK_SIZE is not None:
+        return _BLOCK_SIZE
     if cuda is None:
         return 256
     try:
@@ -45,10 +57,12 @@ def _optimal_block_size() -> int:
         )
         for size in [512, 256, 128]:
             if size <= max_threads:
+                _BLOCK_SIZE = size
                 return size
     except Exception:
         pass
-    return 256
+    _BLOCK_SIZE = 256
+    return _BLOCK_SIZE
 
 
 def get_kernel(name: str, src: str):
@@ -291,6 +305,49 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     return Tensor(out_gpu, gpu=True, inputs=inputs)
 
 
+def launch_broadcast_binary(big, small, op_symbol: str, small_is_left: bool,
+                            op_name: str):
+    """
+    Trailing-dim broadcast binary op: out[idx] = a[idx] OP b[idx % m].
+
+    `big` is the full-size operand (m·k elements), `small` the broadcast operand
+    (m elements aligned to `big`'s trailing dimensions, e.g. a (N,) bias added to
+    an (M, N) matrix in row-major layout). `small_is_left` flips operand order so
+    non-commutative ops (sub, div) stay correct.
+    """
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    assert big.on_gpu and small.on_gpu, "Both tensors must be on GPU"
+    n = big.size
+    m = small.size
+    if small_is_left:
+        body = f"out[idx] = b[idx % m] {op_symbol} a[idx];"
+    else:
+        body = f"out[idx] = a[idx] {op_symbol} b[idx % m];"
+    kernel_src = f"""
+    __global__ void {op_name}(const float* a, const float* b, float* out, int n, int m) {{
+        int idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx < n) {{ {body} }}
+    }}
+    """
+    func = get_kernel(op_name, kernel_src)
+    out_gpu = mempool.alloc(n * 4)
+    bs = _optimal_block_size()
+    block = (bs, 1, 1)
+    grid = ((n + bs - 1) // bs, 1, 1)
+    stream = _get_stream()
+    func(big.gpu_ptr, small.gpu_ptr, out_gpu, np.int32(n), np.int32(m),
+         block=block, grid=grid, stream=stream)
+
+    from importlib import import_module
+    Tensor = getattr(import_module("novax.core"), "Tensor")
+    result = Tensor(out_gpu, gpu=True, inputs=[big, small])
+    result.shape = big.shape
+    result.size = n
+    result.dtype = np.float32
+    return result
+
+
 def launch_reduce(a, op_name: str, reduce_type: str):
     """Two-pass parallel reduction. Always returns a float32 scalar tensor."""
     if cuda is None:
@@ -401,20 +458,60 @@ __global__ void fp16_to_fp32(const __half* in, float* out, int n) {
 # Item 0: cuBLAS-backed matmul
 # ---------------------------------------------------------------------------
 
+_cublas_handle = None   # persistent cuBLAS handle (create/destroy is expensive)
+
+
+def _get_cublas_handle():
+    """Lazily create and cache a single cuBLAS handle. None if unavailable."""
+    global _cublas_handle
+    if _cublas_handle is not None:
+        return _cublas_handle
+    try:
+        from skcuda import cublas as sk_cublas
+    except ImportError:
+        return None
+    try:
+        _cublas_handle = sk_cublas.cublasCreate()
+    except Exception:
+        return None
+    import atexit
+    atexit.register(_destroy_cublas_handle)
+    return _cublas_handle
+
+
+def _destroy_cublas_handle():
+    global _cublas_handle
+    if _cublas_handle is None:
+        return
+    try:
+        from skcuda import cublas as sk_cublas
+        sk_cublas.cublasDestroy(_cublas_handle)
+    except Exception:
+        pass
+    finally:
+        _cublas_handle = None
+
+
 def _launch_matmul_cublas(a, b):
     """
     Matrix multiplication via cuBLAS cublasSgemm (scikit-cuda).
     Returns None if scikit-cuda is not installed.
     """
-    try:
-        from skcuda import cublas as sk_cublas
-    except ImportError:
+    handle = _get_cublas_handle()
+    if handle is None:
         return None
+    from skcuda import cublas as sk_cublas
 
     M, K = a.shape
     _, N = b.shape
     try:
-        handle = sk_cublas.cublasCreate()
+        # Run cuBLAS on our stream so it stays ordered with elementwise kernels.
+        stream = _get_stream()
+        if stream is not None:
+            try:
+                sk_cublas.cublasSetStream(handle, stream.handle)
+            except Exception:
+                pass
         out_gpu = mempool.alloc(M * N * 4)
         # cuBLAS uses column-major storage.
         # To compute C = A @ B (row-major), we compute C^T = B^T @ A^T
@@ -429,7 +526,6 @@ def _launch_matmul_cublas(a, b):
             np.float32(0.0),
             out_gpu, N,
         )
-        sk_cublas.cublasDestroy(handle)
 
         from importlib import import_module
         Tensor = getattr(import_module("novax.core"), "Tensor")

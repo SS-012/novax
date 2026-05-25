@@ -383,11 +383,19 @@ class Tensor:
             self._attach_binary_grad(out, left, right, op, track_grad)
             return out
 
-        # GPU fused path
+        # GPU fused path — only when every leaf shares one size (no broadcast).
         folded = self._fold_constants()
         fused_expr, leaves = folded._build_fused()
-        if fused_expr is not None and all(t.on_gpu for t in leaves):
+        if (fused_expr is not None and leaves
+                and len({t.size for t in leaves}) == 1
+                and all(t.on_gpu for t in leaves)):
             out = launch_fused(leaves, fused_expr, "fused_kernel")
+            self._attach_binary_grad(out, left, right, op, track_grad)
+            return out
+
+        # Broadcasting binary (operands differ in size), e.g. matmul(M,N) + bias(N,)
+        if left.size != right.size:
+            out = self._eval_broadcast_binary(left, right, op)
             self._attach_binary_grad(out, left, right, op, track_grad)
             return out
 
@@ -407,6 +415,45 @@ class Tensor:
             out = launch_kernel(left, right, f"{op}_kernel", f"a[idx] {op_symbol} b[idx]")
         self._attach_binary_grad(out, left, right, op, track_grad)
         return out
+
+    def _eval_broadcast_binary(self, left, right, op):
+        """
+        GPU binary op where operands differ in size. Handles the trailing-dim
+        broadcast case (e.g. matmul (M,N) + bias (N,)); falls back to CPU/numpy
+        for any other broadcast pattern.
+        """
+        big, small = (left, right) if left.size >= right.size else (right, left)
+        small_is_left = big is right
+
+        if self._is_trailing_broadcast(big.shape, small.shape, small.size):
+            from novax.ops.launcher import launch_broadcast_binary
+            op_symbol = {"add": "+", "sub": "-", "mul": "*", "div": "/"}.get(op)
+            if op_symbol is not None:
+                name = f"{op}_bcast_{'l' if small_is_left else 'r'}_kernel"
+                return launch_broadcast_binary(big, small, op_symbol, small_is_left, name)
+
+        # CPU fallback for unsupported broadcast shapes / pow
+        left_arr = left.to_host() if left.on_gpu else left.data
+        right_arr = right.to_host() if right.on_gpu else right.data
+        result = {
+            "add": left_arr + right_arr,
+            "sub": left_arr - right_arr,
+            "mul": left_arr * right_arr,
+            "div": left_arr / right_arr,
+            "pow": np.power(left_arr, right_arr),
+        }[op]
+        return Tensor(np.asarray(result, dtype=np.float32))
+
+    @staticmethod
+    def _is_trailing_broadcast(big_shape, small_shape, small_size) -> bool:
+        """True if `small` broadcasts against `big`'s trailing dims (row-major)."""
+        if small_size == 1:
+            return True   # scalar broadcast: idx % 1 == 0 picks element 0
+        if big_shape is None or small_shape is None:
+            return False
+        if len(small_shape) > len(big_shape):
+            return False
+        return tuple(big_shape[len(big_shape) - len(small_shape):]) == tuple(small_shape)
 
     # ------------------------------------------------------------------
     # Autograd backward setup helpers
