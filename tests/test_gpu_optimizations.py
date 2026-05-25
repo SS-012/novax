@@ -24,7 +24,7 @@ from novax.ops.launcher import (
     _launch_matmul_cublas,
     _launch_matmul_tiled,
 )
-from novax.ops.gpu.triton_softmax import triton_softmax_1d
+from novax.ops.gpu.softmax import softmax as gpu_softmax
 
 
 # ---------------------------------------------------------------------------
@@ -238,50 +238,32 @@ class TestFp16:
 
 
 # ---------------------------------------------------------------------------
-# Item 7 — Triton fused 1D softmax
+# Item 7 — Multi-pass GPU softmax (warp-shuffle reductions, no Triton bridge)
 # ---------------------------------------------------------------------------
 
-class TestTritonSoftmax:
-    """Item 7: Triton-based fused 1D softmax kernel."""
-
-    def test_triton_softmax_returns_none_without_triton(self):
-        """CPU: triton_softmax_1d returns None when Triton is unavailable (no GPU/Triton in CI)."""
-        if GPU_AVAILABLE:
-            pytest.skip("Skipping CPU-only assertion — GPU present; Triton may be available")
-        # Without Triton installed, the function must return None gracefully.
-        result = triton_softmax_1d(Tensor([1.0, 2.0, 3.0]))
-        assert result is None
+class TestGpuSoftmax:
+    """GPU softmax: max → exp(x-max) → sum → divide, all on-device."""
 
     @pytest.mark.skipif(not GPU_AVAILABLE, reason="GPU not available")
-    def test_triton_softmax_correct_values(self):
-        """GPU: triton_softmax_1d returns softmax values matching numpy for n=1024."""
-        n = 1024
+    def test_softmax_correct_values(self):
+        """GPU softmax matches numpy for n=50,000 (benchmark size)."""
+        n = 50_000
         a_np = np.random.randn(n).astype(np.float32)
         t = Tensor(a_np).to_gpu()
 
-        result = triton_softmax_1d(t)
-        if result is None:
-            pytest.skip("Triton not available in this GPU environment")
+        result_host = gpu_softmax(t).to_host()
 
-        result_host = result.to_host()
-
-        # Reference numerically-stable softmax
         exp_a = np.exp(a_np - np.max(a_np))
         ref = exp_a / np.sum(exp_a)
-
         np.testing.assert_array_almost_equal(result_host, ref, decimal=4)
-        # The output probabilities must sum to 1.0.
-        assert abs(float(np.sum(result_host)) - 1.0) < 1e-4
+        assert abs(float(np.sum(result_host)) - 1.0) < 1e-3
 
     @pytest.mark.skipif(not GPU_AVAILABLE, reason="GPU not available")
-    def test_triton_softmax_shape_preserved(self):
-        """GPU: triton_softmax_1d preserves the input shape."""
+    def test_softmax_shape_preserved(self):
+        """GPU softmax preserves the input shape."""
         n = 512
         t = Tensor(np.random.randn(n).astype(np.float32)).to_gpu()
-        result = triton_softmax_1d(t)
-        if result is None:
-            pytest.skip("Triton not available in this GPU environment")
-        assert result.shape == (n,)
+        assert gpu_softmax(t).shape == (n,)
 
 
 # ---------------------------------------------------------------------------

@@ -153,8 +153,12 @@ structural advantage over stock PyTorch eager.
 - [x] **Warp-shuffle reductions** (`__shfl_down_sync`) + grid-stride load
       accumulation in a single two-pass kernel, replacing the old 2–3 pass
       shared-memory tree reduction.
-- [x] **Triton fast path for softmax** — single-pass Triton kernel (n ≤ 65536)
-      with 5-pass PyCUDA fallback already in `ops/gpu/softmax.py`.
+- [x] **Multi-pass on-device softmax** — `max → exp(x-max) → sum → div` using
+      the warp-shuffle reductions, all kernels on-device and saturating every SM.
+      The earlier Triton single-block bridge was **removed**: it ran the whole
+      reduction on one SM and round-tripped through PyTorch tensors with a full
+      device sync, benchmarking ~11× slower than PyTorch (and far slower than
+      this multi-pass path) for n in the tens of thousands.
 
 **Files:** `ops/launcher.py`, `ops/gpu/*`
 
