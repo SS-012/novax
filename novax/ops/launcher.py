@@ -189,6 +189,21 @@ def _optimal_block_size() -> int:
     return 256
 
 
+def _optimal_reduce_block_size() -> int:
+    if cuda is None:
+        return 256
+    try:
+        max_threads = cuda.Device(0).get_attribute(
+            cuda.device_attribute.MAX_THREADS_PER_BLOCK
+        )
+        for size in [1024, 512, 256]:
+            if size <= max_threads:
+                return size
+    except Exception:
+        pass
+    return 256
+
+
 def get_kernel(name: str, src: str):
     """Compile (if needed) and return a cached CUDA kernel by name."""
     key = (name, src)
@@ -335,7 +350,7 @@ def launch_reduce(a, op_name: str, reduce_type: str, scale: float = 1.0):
     else:
         raise ValueError(f"Unknown reduce_type: {reduce_type}")
 
-    BS = 256
+    BS = _optimal_reduce_block_size()
     kernel_src = f"""
     __global__ void {op_name}(const float* in, float* out, int n, float scale) {{
         extern __shared__ float smem[];
@@ -412,7 +427,7 @@ def launch_softmax(a):
     assert a.on_gpu, "Input tensor must be on GPU"
     assert len(a.shape) == 1, "launch_softmax currently supports 1D tensors"
 
-    BS = 256
+    BS = _optimal_reduce_block_size()
     kernel_src = f"""
     #define BS {BS}
     __global__ void softmax_1d_kernel(const float* x, float* out, int n) {{
