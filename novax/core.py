@@ -279,8 +279,11 @@ class Tensor:
         if (not GPU_AVAILABLE) or self.op not in (_UNARY_ELEMENTWISE | _BINARY_OPS):
             return None
 
-        folded = self._fold_constants()
-        fused_expr, leaves = folded._build_fused()
+        if self.op == "sqrt" and self.inputs and getattr(self.inputs[0], "op", None) == "abs":
+            fused_expr, leaves = self._build_fused()
+        else:
+            folded = self._fold_constants()
+            fused_expr, leaves = folded._build_fused()
         if fused_expr is None or not leaves:
             return None
         if not all(getattr(t, "on_gpu", False) for t in leaves):
