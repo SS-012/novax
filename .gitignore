@@ -8,6 +8,10 @@ dist/
 # Virtual environments
 .venv/
 env/
+novax/Include
+novax/Lib
+novax/Scripts
+novax/pyvenv.cfg
 
 # Hatch / Build artifacts
 *.egg-info/
