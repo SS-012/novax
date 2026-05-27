@@ -340,6 +340,15 @@ class TestGPUNewOps:
         result = nx.sum(a)
         assert abs(float(result.to_host()[0]) - 10.0) < 1e-4
 
+    def test_gpu_large_sum_and_mean(self):
+        arr = np.linspace(-1.0, 1.0, 10000, dtype=np.float32)
+        a = Tensor(arr).to_gpu()
+        nx.set_default_device("gpu")
+        sum_result = nx.sum(a)
+        mean_result = nx.mean(a)
+        assert abs(float(sum_result.to_host()[0]) - float(np.sum(arr))) < 1e-2
+        assert abs(float(mean_result.to_host()[0]) - float(np.mean(arr))) < 1e-5
+
     def test_gpu_softmax(self):
         arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
         a = Tensor(arr).to_gpu()

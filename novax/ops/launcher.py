@@ -204,6 +204,15 @@ def _optimal_reduce_block_size() -> int:
     return 256
 
 
+def _multiprocessor_count() -> int:
+    if cuda is None:
+        return 1
+    try:
+        return int(cuda.Device(0).get_attribute(cuda.device_attribute.MULTIPROCESSOR_COUNT))
+    except Exception:
+        return 16
+
+
 def get_kernel(name: str, src: str):
     """Compile (if needed) and return a cached CUDA kernel by name."""
     key = (name, src)
@@ -338,6 +347,11 @@ def launch_reduce(a, op_name: str, reduce_type: str, scale: float = 1.0):
         raise RuntimeError("GPU not available: cannot launch kernels")
     assert a.on_gpu, "Input tensor must be on GPU"
 
+    if reduce_type == "sum" and a.size >= 65536:
+        out = _launch_sum_atomic(a, op_name + "_atomic", scale)
+        if out is not None:
+            return out
+
     if reduce_type == "sum":
         init_val = "0.0f"
         reduce_op = "smem[tid] += smem[tid + stride];"
@@ -407,6 +421,56 @@ def launch_reduce(a, op_name: str, reduce_type: str, scale: float = 1.0):
     from importlib import import_module
     Tensor = getattr(import_module("novax.core"), "Tensor")
     result = Tensor(final_gpu, gpu=True, inputs=[a])
+    result.shape = (1,)
+    result.size = 1
+    result.dtype = np.float32
+    return result
+
+
+def _launch_sum_atomic(a, op_name: str, scale: float):
+    BS = _optimal_reduce_block_size()
+    grid_size = min((a.size + BS - 1) // BS, max(1, _multiprocessor_count() * 8))
+    kernel_src = f"""
+    __global__ void {op_name}(const float* in, float* out, int n, float scale) {{
+        extern __shared__ float smem[];
+        int tid = threadIdx.x;
+        int stride = blockDim.x * gridDim.x;
+        float acc = 0.0f;
+        for (int idx = blockIdx.x * blockDim.x + tid; idx < n; idx += stride) {{
+            acc += in[idx];
+        }}
+
+        smem[tid] = acc;
+        __syncthreads();
+        for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {{
+            if (tid < offset) {{
+                smem[tid] += smem[tid + offset];
+            }}
+            __syncthreads();
+        }}
+        if (tid == 0) {{
+            atomicAdd(out, smem[0] * scale);
+        }}
+    }}
+    """
+
+    try:
+        func = get_kernel(op_name, kernel_src)
+        out_gpu = mempool.alloc(4)
+        stream = _get_stream()
+        if stream is not None:
+            cuda.memset_d32_async(out_gpu, 0, 1, stream)
+        else:
+            cuda.memset_d32(out_gpu, 0, 1)
+        func(a.gpu_ptr, out_gpu, np.int32(a.size), np.float32(scale),
+             block=(BS, 1, 1), grid=(grid_size, 1, 1),
+             shared=BS * 4, stream=stream)
+    except Exception:
+        return None
+
+    from importlib import import_module
+    Tensor = getattr(import_module("novax.core"), "Tensor")
+    result = Tensor(out_gpu, gpu=True, inputs=[a])
     result.shape = (1,)
     result.size = 1
     result.dtype = np.float32
