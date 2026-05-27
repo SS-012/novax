@@ -668,7 +668,9 @@ def launch_matmul(a, b):
 
 
 def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
-    if M != K or K != N or M < 128:
+    square_gemm = M == K and K == N and M >= 128
+    mlp_rect_gemm = M == 128 and K >= 128 and N >= 128 and max(K, N) <= 512
+    if not (square_gemm or mlp_rect_gemm):
         return None
     lib, handle = _get_cublas()
     if lib is None or handle is None:

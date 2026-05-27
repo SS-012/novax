@@ -334,6 +334,16 @@ class TestGPUNewOps:
         result = nx.matmul(a, b)
         np.testing.assert_array_almost_equal(result.to_host(), a_arr @ b_arr, decimal=3)
 
+    def test_gpu_matmul_rectangular_medium(self):
+        rng = np.random.default_rng(123)
+        a_arr = rng.standard_normal((128, 256), dtype=np.float32)
+        b_arr = rng.standard_normal((256, 128), dtype=np.float32)
+        a = Tensor(a_arr).to_gpu()
+        b = Tensor(b_arr).to_gpu()
+        nx.set_default_device("gpu")
+        result = nx.matmul(a, b)
+        np.testing.assert_array_almost_equal(result.to_host(), a_arr @ b_arr, decimal=3)
+
     def test_gpu_sum(self):
         a = Tensor(np.array([1.0, 2.0, 3.0, 4.0])).to_gpu()
         nx.set_default_device("gpu")
