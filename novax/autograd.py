@@ -33,9 +33,11 @@ def attach_unary_grad(out, inp, op: str):
         return
     out.requires_grad = True
     out._prev = {inp}
-    inp_data = inp.to_host() if inp.on_gpu else inp.data
+    inp_shape = inp.shape
+    inp_size = inp.size
+    inp_data = None if op in ("sum", "mean") else (inp.to_host() if inp.on_gpu else inp.data)
 
-    def _bwd(inp=inp, inp_data=inp_data, out=out, op=op):
+    def _bwd(inp=inp, inp_data=inp_data, inp_shape=inp_shape, inp_size=inp_size, out=out, op=op):
         g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
         if op == "neg":
             dL = -g
@@ -57,9 +59,9 @@ def attach_unary_grad(out, inp, op: str):
             t = np.tanh(inp_data)
             dL = g * (1.0 - t ** 2)
         elif op == "sum":
-            dL = np.full(inp_data.shape, float(g.flat[0]), dtype=np.float32)
+            dL = np.full(inp_shape, float(g.flat[0]), dtype=np.float32)
         elif op == "mean":
-            dL = np.full(inp_data.shape, float(g.flat[0]) / float(inp_data.size), dtype=np.float32)
+            dL = np.full(inp_shape, float(g.flat[0]) / float(inp_size), dtype=np.float32)
         elif op == "max":
             mask = (inp_data == np.max(inp_data)).astype(np.float32)
             mask /= np.sum(mask)
