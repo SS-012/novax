@@ -73,10 +73,6 @@ def _apply_broadcast_indices(expr: str, inputs, output_shape, output_size: int) 
 
 
 def _get_stream():
-    return None
-
-
-def _get_atomic_stream():
     global _stream
     if cuda is None:
         return None
@@ -461,7 +457,7 @@ def _launch_sum_atomic(a, op_name: str, scale: float):
     try:
         func = get_kernel(op_name, kernel_src)
         out_gpu = mempool.alloc(4)
-        stream = _get_atomic_stream()
+        stream = _get_stream()
         if stream is not None:
             cuda.memset_d32_async(out_gpu, 0, 1, stream)
         else:
