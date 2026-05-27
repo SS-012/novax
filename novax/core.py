@@ -1,12 +1,6 @@
 import atexit
 
 import numpy as np
-from novax.autograd import (
-    _get_grad_enabled,
-    attach_binary_grad,
-    attach_matmul_grad,
-    attach_unary_grad,
-)
 from novax.utils import mempool
 from novax.ops.launcher import launch_kernel, launch_fused
 
@@ -249,6 +243,8 @@ class Tensor:
 
     def eval(self):
         """Compile and execute the expression graph, returning a concrete Tensor."""
+        from novax.autograd import _get_grad_enabled
+
         if self.is_leaf:
             return self
 
@@ -399,14 +395,17 @@ class Tensor:
 
     def _attach_unary_grad(self, out, inp, op, track_grad):
         if track_grad:
+            from novax.autograd import attach_unary_grad
             attach_unary_grad(out, inp, op)
 
     def _attach_matmul_grad(self, out, left, right, track_grad):
         if track_grad:
+            from novax.autograd import attach_matmul_grad
             attach_matmul_grad(out, left, right)
 
     def _attach_binary_grad(self, out, left, right, op, track_grad):
         if track_grad:
+            from novax.autograd import attach_binary_grad
             attach_binary_grad(out, left, right, op)
 
     # ------------------------------------------------------------------
