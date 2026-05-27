@@ -16,6 +16,7 @@ from novax.utils import mempool
 
 # Cache compiled kernels to avoid recompilation
 _kernel_cache = {}
+_prepared_signatures = {}
 # Lazily create streams only after a CUDA context exists; default to None
 _stream = None
 _cublas_lib = None
@@ -235,6 +236,15 @@ def get_kernel(name: str, src: str):
     return func
 
 
+def _prepared_async_call(func, signature: str, grid, block, stream, *args, shared_size: int = 0):
+    """Launch a cached kernel using PyCUDA's lower-overhead prepared call path."""
+    key = id(func)
+    if _prepared_signatures.get(key) != signature:
+        func.prepare(signature)
+        _prepared_signatures[key] = signature
+    func.prepared_async_call(grid, block, stream, *args, shared_size=shared_size)
+
+
 def launch_kernel(a, b=None, op_name: str = "custom_kernel", expr: str = None, scalar: Optional[float] = None):
     """
     Generic GPU kernel launcher for elementwise operations.
@@ -294,11 +304,11 @@ def launch_kernel(a, b=None, op_name: str = "custom_kernel", expr: str = None, s
 
     stream = _get_stream()
     if b is None and scalar is None:
-        func(a.gpu_ptr, out_gpu, np.int32(n), block=block, grid=grid, stream=stream)
+        _prepared_async_call(func, "PPi", grid, block, stream, a.gpu_ptr, out_gpu, np.int32(n))
     elif b is None and scalar is not None:
-        func(a.gpu_ptr, np.float32(scalar), out_gpu, np.int32(n), block=block, grid=grid, stream=stream)
+        _prepared_async_call(func, "PfPi", grid, block, stream, a.gpu_ptr, np.float32(scalar), out_gpu, np.int32(n))
     else:
-        func(a.gpu_ptr, b.gpu_ptr, out_gpu, np.int32(n), block=block, grid=grid, stream=stream)
+        _prepared_async_call(func, "PPPi", grid, block, stream, a.gpu_ptr, b.gpu_ptr, out_gpu, np.int32(n))
 
     Tensor = _get_tensor_cls()
     return Tensor(out_gpu, gpu=True, inputs=[a, b] if b else [a])
@@ -333,7 +343,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
 
     args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n)]
     stream = _get_stream()
-    func(*args, block=block, grid=grid, stream=stream)
+    _prepared_async_call(func, "P" * (len(inputs) + 1) + "i", grid, block, stream, *args)
     Tensor = _get_tensor_cls()
     return Tensor(out_gpu, gpu=True, inputs=inputs)
 
