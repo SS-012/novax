@@ -724,7 +724,7 @@ def launch_matmul_bias_relu(x, w, bias):
     assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
 
-    TILE = 32 if (M == 256 and K == 512 and N == 256) else 16
+    TILE = 16
     kernel_src = f"""
     #define TILE_SIZE {TILE}
     __global__ void matmul_bias_relu_kernel(
