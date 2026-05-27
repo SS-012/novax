@@ -278,8 +278,6 @@ class Tensor:
     def _try_eval_fused_elementwise(self, track_grad: bool):
         if (not GPU_AVAILABLE) or self.op not in (_UNARY_ELEMENTWISE | _BINARY_OPS):
             return None
-        if self._contains_direct_matmul_child():
-            return None
 
         folded = self._fold_constants()
         fused_expr, leaves = folded._build_fused()
@@ -294,15 +292,6 @@ class Tensor:
             return launch_fused(leaves, fused_expr, "fused_kernel")
         except Exception:
             return None
-
-    def _contains_direct_matmul_child(self) -> bool:
-        for child in getattr(self, "inputs", ()):
-            if getattr(child, "op", None) == "matmul":
-                return True
-            if getattr(child, "op", None) in (_UNARY_ELEMENTWISE | _BINARY_OPS):
-                if any(getattr(grandchild, "op", None) == "matmul" for grandchild in getattr(child, "inputs", ())):
-                    return True
-        return False
 
     def _eval_unary(self, inp, track_grad: bool):
         op = self.op
