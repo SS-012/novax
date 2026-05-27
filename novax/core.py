@@ -121,9 +121,12 @@ class Tensor:
         if data is None:
             self.data = None
             if self.inputs:
-                self.shape = self.inputs[0].shape
+                if op in ("matmul", "matmul_bias") and len(self.inputs) >= 2:
+                    self.shape = (self.inputs[0].shape[0], self.inputs[1].shape[1])
+                else:
+                    self.shape = self.inputs[0].shape
                 self.dtype = self.inputs[0].dtype
-                self.size = self.inputs[0].size
+                self.size = int(np.prod(self.shape))
             else:
                 self.shape = None
                 self.dtype = None
@@ -184,10 +187,18 @@ class Tensor:
     # ------------------------------------------------------------------
 
     def __add__(self, other):
-        return Tensor(None, op="add", inputs=[self, self._wrap(other)])
+        other = self._wrap(other)
+        matmul_bias = self._try_build_matmul_bias(other)
+        if matmul_bias is not None:
+            return matmul_bias
+        return Tensor(None, op="add", inputs=[self, other])
 
     def __radd__(self, other):
-        return self.__add__(other)
+        other = self._wrap(other)
+        matmul_bias = other._try_build_matmul_bias(self)
+        if matmul_bias is not None:
+            return matmul_bias
+        return Tensor(None, op="add", inputs=[other, self])
 
     def __mul__(self, other):
         return Tensor(None, op="mul", inputs=[self, self._wrap(other)])
@@ -218,6 +229,23 @@ class Tensor:
 
     def _wrap(self, val):
         return val if isinstance(val, Tensor) else Tensor(val)
+
+    def _try_build_matmul_bias(self, bias):
+        if not GPU_AVAILABLE or not hasattr(self, "_matmul_inputs"):
+            return None
+        x, w = self._matmul_inputs
+        if any(getattr(t, "requires_grad", False) for t in (self, x, w, bias)):
+            return None
+        if not (
+            getattr(self, "on_gpu", False)
+            and getattr(x, "on_gpu", False)
+            and getattr(w, "on_gpu", False)
+            and getattr(bias, "on_gpu", False)
+        ):
+            return None
+        if len(getattr(self, "shape", ())) != 2 or bias.size != self.shape[1]:
+            return None
+        return Tensor(None, op="matmul_bias", inputs=[x, w, bias])
 
     # ------------------------------------------------------------------
     # Shape manipulation
@@ -250,6 +278,10 @@ class Tensor:
 
         track_grad = _get_grad_enabled()
         if self.op in _UNARY_ELEMENTWISE:
+            fused_mm = self._try_eval_matmul_bias_relu(track_grad)
+            if fused_mm is not None:
+                return fused_mm
+
             fused = self._try_eval_fused_elementwise(track_grad)
             if fused is not None:
                 return fused
@@ -265,6 +297,12 @@ class Tensor:
             left = self.inputs[0].eval()
             right = self.inputs[1].eval()
             return self._eval_matmul(left, right, track_grad)
+
+        if self.op == "matmul_bias":
+            left = self.inputs[0].eval()
+            right = self.inputs[1].eval()
+            bias = self.inputs[2].eval()
+            return self._eval_matmul_bias(left, right, bias, track_grad)
 
         # Binary elementwise: add, sub, mul, div, pow
         fused = self._try_eval_fused_elementwise(track_grad)
@@ -290,6 +328,46 @@ class Tensor:
 
         try:
             return launch_fused(leaves, fused_expr, "fused_kernel")
+        except Exception:
+            return None
+
+    def _try_eval_matmul_bias_relu(self, track_grad: bool):
+        if (not GPU_AVAILABLE) or self.op != "relu":
+            return None
+
+        source = self.inputs[0]
+        if getattr(source, "op", None) == "matmul_bias":
+            matmul_node = source
+            bias_node = source.inputs[2]
+        elif getattr(source, "op", None) == "add":
+            left, right = source.inputs
+            if getattr(left, "op", None) == "matmul":
+                matmul_node, bias_node = left, right
+            elif getattr(right, "op", None) == "matmul":
+                matmul_node, bias_node = right, left
+            else:
+                return None
+        else:
+            return None
+
+        x_node, w_node = matmul_node.inputs[:2]
+        if track_grad and any(
+            getattr(t, "requires_grad", False) for t in (x_node, w_node, bias_node)
+        ):
+            return None
+
+        try:
+            x = x_node.eval()
+            w = w_node.eval()
+            bias = bias_node.eval()
+            if not (x.on_gpu and w.on_gpu and bias.on_gpu):
+                return None
+            if len(x.shape) != 2 or len(w.shape) != 2:
+                return None
+            if x.shape[1] != w.shape[0] or bias.size != w.shape[1]:
+                return None
+            from novax.ops.launcher import launch_matmul_bias_relu
+            return launch_matmul_bias_relu(x, w, bias)
         except Exception:
             return None
 
@@ -346,6 +424,27 @@ class Tensor:
         out = Tensor(np.matmul(left_arr, right_arr))
         self._attach_matmul_grad(out, left, right, track_grad)
         return out
+
+    def _eval_matmul_bias(self, left, right, bias, track_grad: bool):
+        if track_grad and (
+            getattr(left, "requires_grad", False)
+            or getattr(right, "requires_grad", False)
+            or getattr(bias, "requires_grad", False)
+        ):
+            matmul_out = self._eval_matmul(left, right, track_grad)
+            return Tensor(None, op="add", inputs=[matmul_out, bias]).eval()
+
+        if GPU_AVAILABLE and left.on_gpu and right.on_gpu and bias.on_gpu:
+            try:
+                from novax.ops.launcher import launch_matmul_bias
+                return launch_matmul_bias(left, right, bias)
+            except Exception:
+                pass
+
+        left_arr = left.to_host() if left.on_gpu else left.data
+        right_arr = right.to_host() if right.on_gpu else right.data
+        bias_arr = bias.to_host() if bias.on_gpu else bias.data
+        return Tensor(np.matmul(left_arr, right_arr) + bias_arr)
 
     def _eval_binary(self, left, right, track_grad: bool):
         op = self.op
