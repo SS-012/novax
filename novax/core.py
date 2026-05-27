@@ -2,7 +2,7 @@ import atexit
 
 import numpy as np
 from novax.utils import mempool
-from novax.ops.launcher import launch_kernel, launch_fused
+from novax.ops.launcher import launch_kernel, launch_fused, launch_matmul_bias_relu
 
 _CUDA_CONTEXT = None
 
@@ -121,9 +121,12 @@ class Tensor:
         if data is None:
             self.data = None
             if self.inputs:
-                self.shape = self.inputs[0].shape
+                if op == "matmul" and len(self.inputs) == 2:
+                    self.shape = (self.inputs[0].shape[0], self.inputs[1].shape[1])
+                else:
+                    self.shape = self.inputs[0].shape
                 self.dtype = self.inputs[0].dtype
-                self.size = self.inputs[0].size
+                self.size = int(np.prod(self.shape))
             else:
                 self.shape = None
                 self.dtype = None
@@ -250,6 +253,10 @@ class Tensor:
 
         track_grad = _get_grad_enabled()
         if self.op in _UNARY_ELEMENTWISE:
+            fused_mm = self._try_eval_matmul_bias_relu(track_grad)
+            if fused_mm is not None:
+                return fused_mm
+
             fused = self._try_eval_fused_elementwise(track_grad)
             if fused is not None:
                 return fused
@@ -290,6 +297,42 @@ class Tensor:
 
         try:
             return launch_fused(leaves, fused_expr, "fused_kernel")
+        except Exception:
+            return None
+
+    def _try_eval_matmul_bias_relu(self, track_grad: bool):
+        if (not GPU_AVAILABLE) or self.op != "relu":
+            return None
+
+        add_node = self.inputs[0]
+        if getattr(add_node, "op", None) != "add":
+            return None
+
+        left, right = add_node.inputs
+        if getattr(left, "op", None) == "matmul":
+            matmul_node, bias_node = left, right
+        elif getattr(right, "op", None) == "matmul":
+            matmul_node, bias_node = right, left
+        else:
+            return None
+
+        x_node, w_node = matmul_node.inputs
+        if track_grad and any(
+            getattr(t, "requires_grad", False) for t in (x_node, w_node, bias_node)
+        ):
+            return None
+
+        try:
+            x = x_node.eval()
+            w = w_node.eval()
+            bias = bias_node.eval()
+            if not (x.on_gpu and w.on_gpu and bias.on_gpu):
+                return None
+            if len(x.shape) != 2 or len(w.shape) != 2:
+                return None
+            if x.shape[1] != w.shape[0] or bias.size != w.shape[1]:
+                return None
+            return launch_matmul_bias_relu(x, w, bias)
         except Exception:
             return None
 

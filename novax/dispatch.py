@@ -112,7 +112,15 @@ def pow(a, b):
 def matmul(a, b):
     from novax.core import Tensor
     from novax.autograd import attach_matmul_grad
-    if _is_lazy(a) or _is_lazy(b):
+    if (
+        _is_lazy(a)
+        or _is_lazy(b)
+        or (
+            _use_gpu(a, b)
+            and not getattr(a, "requires_grad", False)
+            and not getattr(b, "requires_grad", False)
+        )
+    ):
         return Tensor(None, op="matmul", inputs=[a, b])
     out = gpu_matmul(a, b) if (_use_gpu(a, b) and gpu_matmul) else cpu_matmul(a, b)
     attach_matmul_grad(out, a, b)
