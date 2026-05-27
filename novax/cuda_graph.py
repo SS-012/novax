@@ -77,7 +77,9 @@ class CUDAGraph:
         if not self._exec.value:
             raise RuntimeError("CUDAGraph.capture() must be called before replay()")
         stream_handle = ctypes.c_void_p(int(self._stream.handle))
-        _check(self._cudart.cudaGraphLaunch(self._exec, stream_handle), "cudaGraphLaunch")
+        status = self._cudart.cudaGraphLaunch(self._exec, stream_handle)
+        if status != 0:
+            raise RuntimeError(f"cudaGraphLaunch failed with CUDA runtime status {status}")
 
     def __del__(self):
         try:
