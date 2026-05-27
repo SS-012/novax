@@ -35,6 +35,8 @@ def _broadcast_index_expr(t, output_shape, output_size, idx_expr="idx"):
     out_shape = tuple(output_shape)
     if not in_shape or len(in_shape) > len(out_shape):
         return None
+    if len(in_shape) == 1 and len(out_shape) > 1 and in_shape[0] == out_shape[-1]:
+        return f"({idx_expr} % {in_shape[0]})"
 
     padded = (1,) * (len(out_shape) - len(in_shape)) + in_shape
     in_strides = []
