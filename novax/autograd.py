@@ -26,6 +26,20 @@ class no_grad:
 # Used by both core.Tensor.eval() and dispatch functions.
 # ---------------------------------------------------------------------------
 
+def _accumulate_grad(t, grad):
+    from novax.core import Tensor
+    if t.grad is None:
+        t.grad = grad
+        return
+    if getattr(t.grad, "on_gpu", False) and getattr(grad, "on_gpu", False):
+        from novax.ops.launcher import launch_kernel
+        t.grad = launch_kernel(t.grad, grad, "grad_accum_add_kernel", "a[idx] + b[idx]")
+        return
+    current = t.grad.to_host() if getattr(t.grad, "on_gpu", False) else t.grad.data
+    incoming = grad.to_host() if getattr(grad, "on_gpu", False) else grad.data
+    t.grad = Tensor((current + incoming).astype(np.float32))
+
+
 def attach_unary_grad(out, inp, op: str):
     """Attach a backward closure for a unary op result."""
     from novax.core import Tensor  # local import avoids circular import
@@ -33,10 +47,25 @@ def attach_unary_grad(out, inp, op: str):
         return
     out.requires_grad = True
     out._prev = {inp}
-    inp_data = inp.to_host() if inp.on_gpu else inp.data
+    gpu_backward = getattr(inp, "on_gpu", False) and op in ("sum", "mean", "relu")
+    inp_data = None if gpu_backward else (inp.to_host() if inp.on_gpu else inp.data)
 
     def _bwd(inp=inp, inp_data=inp_data, out=out, op=op):
-        g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
+        grad = out.grad
+        if grad is not None and getattr(grad, "on_gpu", False) and getattr(inp, "on_gpu", False):
+            if op in ("sum", "mean"):
+                from novax.ops.launcher import launch_fill_from_scalar
+                scale = 1.0 if op == "sum" else 1.0 / float(inp.size)
+                _accumulate_grad(inp, launch_fill_from_scalar(grad, inp.shape, scale=scale))
+                return
+            if op == "relu":
+                from novax.ops.launcher import launch_relu_backward
+                _accumulate_grad(inp, launch_relu_backward(inp, grad))
+                return
+
+        g = (grad.to_host() if getattr(grad, "on_gpu", False) else grad.data) if grad is not None else np.ones(out.shape, dtype=np.float32)
+        if inp_data is None and op not in ("sum", "mean"):
+            inp_data = inp.to_host() if inp.on_gpu else inp.data
         if op == "neg":
             dL = -g
         elif op == "exp":
@@ -57,9 +86,9 @@ def attach_unary_grad(out, inp, op: str):
             t = np.tanh(inp_data)
             dL = g * (1.0 - t ** 2)
         elif op == "sum":
-            dL = np.full(inp_data.shape, float(g.flat[0]), dtype=np.float32)
+            dL = np.full(inp.shape, float(g.flat[0]), dtype=np.float32)
         elif op == "mean":
-            dL = np.full(inp_data.shape, float(g.flat[0]) / float(inp_data.size), dtype=np.float32)
+            dL = np.full(inp.shape, float(g.flat[0]) / float(inp.size), dtype=np.float32)
         elif op == "max":
             mask = (inp_data == np.max(inp_data)).astype(np.float32)
             mask /= np.sum(mask)
@@ -70,8 +99,7 @@ def attach_unary_grad(out, inp, op: str):
             dL = float(g.flat[0]) * mask
         else:
             dL = np.zeros_like(inp_data)
-        acc = inp.grad.data + dL if inp.grad is not None else dL.copy()
-        inp.grad = Tensor(acc.astype(np.float32))
+        _accumulate_grad(inp, Tensor(dL.astype(np.float32)))
 
     out._backward = _bwd
 
@@ -101,11 +129,45 @@ def attach_binary_grad(out, left, right, op: str):
     if getattr(right, "requires_grad", False):
         out._prev.add(right)
 
-    left_arr = left.to_host() if left.on_gpu else left.data
-    right_arr = right.to_host() if right.on_gpu else right.data
+    gpu_add_sub = (
+        op in ("add", "sub")
+        and getattr(left, "on_gpu", False)
+        and getattr(right, "on_gpu", False)
+    )
+    left_arr = None if gpu_add_sub else (left.to_host() if left.on_gpu else left.data)
+    right_arr = None if gpu_add_sub else (right.to_host() if right.on_gpu else right.data)
 
     def _bwd(left=left, right=right, left_arr=left_arr, right_arr=right_arr, out=out, op=op):
-        g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
+        grad = out.grad
+        if (
+            grad is not None
+            and getattr(grad, "on_gpu", False)
+            and op in ("add", "sub")
+            and getattr(left, "on_gpu", False)
+            and getattr(right, "on_gpu", False)
+        ):
+            from novax.ops.launcher import launch_kernel, launch_reduce_axis0
+            if getattr(left, "requires_grad", False):
+                if left.shape == grad.shape:
+                    dL = grad
+                elif len(grad.shape) == 2 and left.shape == (grad.shape[1],):
+                    dL = launch_reduce_axis0(grad)
+                else:
+                    dL = Tensor(_unbroadcast(grad.to_host(), left.shape))
+                _accumulate_grad(left, dL)
+            if getattr(right, "requires_grad", False):
+                sign = 1.0 if op == "add" else -1.0
+                if right.shape == grad.shape:
+                    dR = grad if sign > 0 else launch_kernel(grad, None, "grad_neg_kernel", "(-a[idx])")
+                elif len(grad.shape) == 2 and right.shape == (grad.shape[1],):
+                    dR = launch_reduce_axis0(grad, scale=sign)
+                else:
+                    g_host = grad.to_host()
+                    dR = Tensor(_unbroadcast(np.array(sign * g_host, dtype=np.float32), right.shape))
+                _accumulate_grad(right, dR)
+            return
+
+        g = (grad.to_host() if getattr(grad, "on_gpu", False) else grad.data) if grad is not None else np.ones(out.shape, dtype=np.float32)
         if op == "add":
             dL, dR = g, g
         elif op == "sub":
@@ -124,12 +186,10 @@ def attach_binary_grad(out, left, right, op: str):
 
         if getattr(left, "requires_grad", False):
             dL = _unbroadcast(np.array(dL, dtype=np.float32), left_arr.shape)
-            acc = left.grad.data + dL if left.grad is not None else dL.copy()
-            left.grad = Tensor(acc.astype(np.float32))
+            _accumulate_grad(left, Tensor(dL.astype(np.float32)))
         if getattr(right, "requires_grad", False):
             dR = _unbroadcast(np.array(dR, dtype=np.float32), right_arr.shape)
-            acc = right.grad.data + dR if right.grad is not None else dR.copy()
-            right.grad = Tensor(acc.astype(np.float32))
+            _accumulate_grad(right, Tensor(dR.astype(np.float32)))
 
     out._backward = _bwd
 
@@ -149,18 +209,31 @@ def attach_matmul_grad(out, left, right):
     if getattr(right, "requires_grad", False):
         out._prev.add(right)
 
-    left_arr = left.to_host() if left.on_gpu else left.data
-    right_arr = right.to_host() if right.on_gpu else right.data
+    gpu_backward = getattr(left, "on_gpu", False) and getattr(right, "on_gpu", False)
+    left_arr = None if gpu_backward else (left.to_host() if left.on_gpu else left.data)
+    right_arr = None if gpu_backward else (right.to_host() if right.on_gpu else right.data)
 
     def _bwd(left=left, right=right, left_arr=left_arr, right_arr=right_arr, out=out):
-        g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
+        grad = out.grad
+        if (
+            grad is not None
+            and getattr(grad, "on_gpu", False)
+            and getattr(left, "on_gpu", False)
+            and getattr(right, "on_gpu", False)
+        ):
+            from novax.ops.launcher import launch_matmul_transpose
+            if getattr(left, "requires_grad", False):
+                _accumulate_grad(left, launch_matmul_transpose(grad, right, False, True))
+            if getattr(right, "requires_grad", False):
+                _accumulate_grad(right, launch_matmul_transpose(left, grad, True, False))
+            return
+
+        g = (grad.to_host() if getattr(grad, "on_gpu", False) else grad.data) if grad is not None else np.ones(out.shape, dtype=np.float32)
         if getattr(left, "requires_grad", False):
             dL = g @ right_arr.T
-            acc = left.grad.data + dL if left.grad is not None else dL.copy()
-            left.grad = Tensor(acc.astype(np.float32))
+            _accumulate_grad(left, Tensor(dL.astype(np.float32)))
         if getattr(right, "requires_grad", False):
             dR = left_arr.T @ g
-            acc = right.grad.data + dR if right.grad is not None else dR.copy()
-            right.grad = Tensor(acc.astype(np.float32))
+            _accumulate_grad(right, Tensor(dR.astype(np.float32)))
 
     out._backward = _bwd
