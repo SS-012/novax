@@ -279,8 +279,10 @@ class Tensor:
         if (not GPU_AVAILABLE) or self.op not in (_UNARY_ELEMENTWISE | _BINARY_OPS):
             return None
 
-        folded = self._fold_constants()
-        fused_expr, leaves = folded._build_fused()
+        fused_expr, leaves = self._build_fused()
+        if fused_expr is None:
+            folded = self._fold_constants()
+            fused_expr, leaves = folded._build_fused()
         if fused_expr is None or not leaves:
             return None
         if not all(getattr(t, "on_gpu", False) for t in leaves):
@@ -365,8 +367,10 @@ class Tensor:
             return out
 
         # GPU fused path
-        folded = self._fold_constants()
-        fused_expr, leaves = folded._build_fused()
+        fused_expr, leaves = self._build_fused()
+        if fused_expr is None:
+            folded = self._fold_constants()
+            fused_expr, leaves = folded._build_fused()
         if fused_expr is not None and all(t.on_gpu for t in leaves):
             out = launch_fused(leaves, fused_expr, "fused_kernel")
             self._attach_binary_grad(out, left, right, op, track_grad)
