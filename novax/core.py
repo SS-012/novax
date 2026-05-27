@@ -72,6 +72,24 @@ _UNARY_NUMPY = {
 class Tensor:
     """NovaX tensor: CPU/GPU backed, lazy evaluation, autograd support."""
 
+    __slots__ = (
+        "requires_grad",
+        "grad",
+        "_backward",
+        "_prev",
+        "is_constant",
+        "const_value",
+        "shape",
+        "size",
+        "dtype",
+        "data",
+        "gpu_ptr",
+        "on_gpu",
+        "is_leaf",
+        "op",
+        "inputs",
+    )
+
     def __init__(self, data, op=None, inputs=None, gpu=False, requires_grad=False):
         self.requires_grad = requires_grad
         self.grad = None
