@@ -440,7 +440,7 @@ def _launch_sum_atomic(a, op_name: str, scale: float):
             return out
 
     BS = _optimal_reduce_block_size()
-    grid_size = min((a.size + BS - 1) // BS, max(1, _multiprocessor_count() * 4))
+    grid_size = min((a.size + BS - 1) // BS, max(1, _multiprocessor_count() * 8))
     kernel_src = f"""
     __global__ void {op_name}(const float* in, float* out, int n, float scale) {{
         extern __shared__ float smem[];
@@ -490,7 +490,7 @@ def _launch_sum_atomic(a, op_name: str, scale: float):
 def _launch_sum_atomic_float4(a, op_name: str, scale: float):
     BS = _optimal_reduce_block_size()
     n4 = a.size // 4
-    grid_size = min((n4 + BS - 1) // BS, max(1, _multiprocessor_count() * 4))
+    grid_size = min((n4 + BS - 1) // BS, max(1, _multiprocessor_count() * 8))
     kernel_src = f"""
     __global__ void {op_name}(const float* in, float* out, int n4, float scale) {{
         extern __shared__ float smem[];
