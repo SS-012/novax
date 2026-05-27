@@ -181,7 +181,7 @@ def _optimal_block_size() -> int:
         max_threads = cuda.Device(0).get_attribute(
             cuda.device_attribute.MAX_THREADS_PER_BLOCK
         )
-        for size in [512, 256, 128]:
+        for size in [1024, 512, 256, 128]:
             if size <= max_threads:
                 return size
     except Exception:
