@@ -604,7 +604,6 @@ def launch_matmul(a, b):
     result.shape = (M, N)
     result.size = M * N
     result.dtype = np.float32
-    result._matmul_inputs = (a, b)
     return result
 
 
@@ -646,66 +645,6 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
     from importlib import import_module
     Tensor = getattr(import_module("novax.core"), "Tensor")
     result = Tensor(out_gpu, gpu=True, inputs=[a, b])
-    result.shape = (M, N)
-    result.size = M * N
-    result.dtype = np.float32
-    result._matmul_inputs = (a, b)
-    return result
-
-
-def launch_matmul_bias(x, w, bias):
-    """
-    Fused matmul + bias add in a single CUDA kernel pass.
-    x: (M, K), w: (K, N), bias: (N,) -> result: (M, N)
-    """
-    if cuda is None:
-        raise RuntimeError("GPU not available: cannot launch kernels")
-    assert x.on_gpu and w.on_gpu and bias.on_gpu, "All tensors must be on GPU"
-    M, K = x.shape
-    K2, N = w.shape
-    assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
-    assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
-
-    TILE = 16
-    kernel_src = f"""
-    #define TILE_SIZE {TILE}
-    __global__ void matmul_bias_kernel(
-        const float* X, const float* W, const float* B, float* C,
-        int M, int K, int N
-    ) {{
-        __shared__ float Xs[TILE_SIZE][TILE_SIZE];
-        __shared__ float Ws[TILE_SIZE][TILE_SIZE];
-        int row = blockIdx.y * TILE_SIZE + threadIdx.y;
-        int col = blockIdx.x * TILE_SIZE + threadIdx.x;
-        float acc = 0.0f;
-        for (int t = 0; t < (K + TILE_SIZE - 1) / TILE_SIZE; t++) {{
-            Xs[threadIdx.y][threadIdx.x] = (row < M && t * TILE_SIZE + threadIdx.x < K)
-                ? X[row * K + t * TILE_SIZE + threadIdx.x] : 0.0f;
-            Ws[threadIdx.y][threadIdx.x] = (col < N && t * TILE_SIZE + threadIdx.y < K)
-                ? W[(t * TILE_SIZE + threadIdx.y) * N + col] : 0.0f;
-            __syncthreads();
-            for (int k = 0; k < TILE_SIZE; k++)
-                acc += Xs[threadIdx.y][k] * Ws[k][threadIdx.x];
-            __syncthreads();
-        }}
-        if (row < M && col < N) {{
-            C[row * N + col] = acc + B[col];
-        }}
-    }}
-    """
-    func = get_kernel("matmul_bias_kernel", kernel_src)
-    out_gpu = mempool.alloc(M * N * 4)
-    block = (TILE, TILE, 1)
-    grid = ((N + TILE - 1) // TILE, (M + TILE - 1) // TILE, 1)
-
-    stream = _get_stream()
-    func(x.gpu_ptr, w.gpu_ptr, bias.gpu_ptr, out_gpu,
-         np.int32(M), np.int32(K), np.int32(N),
-         block=block, grid=grid, stream=stream)
-
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
-    result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
     result.shape = (M, N)
     result.size = M * N
     result.dtype = np.float32

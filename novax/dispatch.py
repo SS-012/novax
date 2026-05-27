@@ -81,14 +81,6 @@ def _exec_binary(op_name, gpu_fn, cpu_fn, a, b):
 
 def add(a, b):
     from novax.core import Tensor
-    if hasattr(a, "_try_build_matmul_bias"):
-        matmul_bias = a._try_build_matmul_bias(b)
-        if matmul_bias is not None:
-            return matmul_bias
-    if hasattr(b, "_try_build_matmul_bias"):
-        matmul_bias = b._try_build_matmul_bias(a)
-        if matmul_bias is not None:
-            return matmul_bias
     if _is_lazy(a) or _is_lazy(b):
         return Tensor(None, op="add", inputs=[a, a._wrap(b) if hasattr(a, "_wrap") else b])
     return _exec_binary("add", gpu_add, cpu_add, a, b)
