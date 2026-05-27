@@ -204,6 +204,50 @@ class TestMatmulGrad:
         np.testing.assert_array_almost_equal(B.grad.data, expected)
 
 
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="GPU not available")
+class TestGPUAutograd:
+    def _gpu_tensor(self, arr, requires_grad=False):
+        return Tensor(np.array(arr, dtype=np.float32), requires_grad=requires_grad).to_gpu()
+
+    def test_gpu_mean_backward_stays_on_device(self):
+        a_arr = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+        a = self._gpu_tensor(a_arr, requires_grad=True)
+
+        nx.mean(a).eval().backward()
+
+        assert a.grad is not None
+        assert a.grad.on_gpu is True
+        np.testing.assert_allclose(a.grad.to_host(), np.full_like(a_arr, 0.25))
+
+    def test_gpu_relu_sum_backward_stays_on_device(self):
+        a_arr = np.array([-2.0, 0.0, 3.0, 4.0], dtype=np.float32)
+        a = self._gpu_tensor(a_arr, requires_grad=True)
+
+        nx.sum(nx.relu(a)).eval().backward()
+
+        assert a.grad is not None
+        assert a.grad.on_gpu is True
+        np.testing.assert_allclose(a.grad.to_host(), [0.0, 0.0, 1.0, 1.0])
+
+    def test_gpu_matmul_bias_mean_backward(self):
+        x_arr = (np.arange(12, dtype=np.float32).reshape(3, 4) / 10.0)
+        w_arr = (np.arange(8, dtype=np.float32).reshape(4, 2) / 10.0)
+        b_arr = np.zeros(2, dtype=np.float32)
+        x = self._gpu_tensor(x_arr)
+        w = self._gpu_tensor(w_arr, requires_grad=True)
+        b = self._gpu_tensor(b_arr, requires_grad=True)
+
+        nx.mean(nx.matmul(x, w) + b).eval().backward()
+
+        grad_out = np.ones((3, 2), dtype=np.float32) / 6.0
+        assert w.grad is not None
+        assert b.grad is not None
+        assert w.grad.on_gpu is True
+        assert b.grad.on_gpu is True
+        np.testing.assert_allclose(w.grad.to_host(), x_arr.T @ grad_out, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(b.grad.to_host(), grad_out.sum(axis=0), rtol=1e-5, atol=1e-5)
+
+
 # ---------------------------------------------------------------------------
 # Chain rule (multi-op backward)
 # ---------------------------------------------------------------------------
