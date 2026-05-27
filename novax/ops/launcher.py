@@ -73,6 +73,11 @@ def _apply_broadcast_indices(expr: str, inputs, output_shape, output_size: int) 
     return expr
 
 
+def _same_shape(inputs, output_shape) -> bool:
+    out_shape = tuple(output_shape)
+    return all(tuple(getattr(t, "shape", ())) == out_shape for t in inputs)
+
+
 def _get_stream():
     global _stream
     if cuda is None:
@@ -254,8 +259,9 @@ def launch_kernel(a, b=None, op_name: str = "custom_kernel", expr: str = None, s
 
     if b is not None:
         assert b.on_gpu, "Input tensor 'b' must be on GPU."
-        expr = _apply_broadcast_indices(expr, [a, b], a.shape, n)
-        assert expr is not None, f"Shapes are not broadcastable: {a.shape} and {b.shape}"
+        if not _same_shape([a, b], a.shape):
+            expr = _apply_broadcast_indices(expr, [a, b], a.shape, n)
+            assert expr is not None, f"Shapes are not broadcastable: {a.shape} and {b.shape}"
 
     if b is None and scalar is None:
         kernel_src = f"""
@@ -313,8 +319,9 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
         raise RuntimeError("GPU not available: cannot launch kernels")
     assert all(t.on_gpu for t in inputs), "All inputs must be on GPU"
     n = inputs[0].size
-    expr = _apply_broadcast_indices(expr, inputs, inputs[0].shape, n)
-    assert expr is not None, "All inputs must be broadcastable to the output shape"
+    if not _same_shape(inputs, inputs[0].shape):
+        expr = _apply_broadcast_indices(expr, inputs, inputs[0].shape, n)
+        assert expr is not None, "All inputs must be broadcastable to the output shape"
 
     params = ", ".join([f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"])
     kernel_src = f"""
