@@ -20,6 +20,7 @@ from .dispatch import (
     sum, mean, max, min,
 )
 from .autograd import no_grad
+from .cuda_graph import CUDAGraph
 from .ops.launcher import launch_matmul_bias_relu
 
 

@@ -396,3 +396,10 @@ class TestGPUNewOps:
         nx.set_default_device("gpu")
         result = nx.sqrt(nx.abs(a)).eval()
         np.testing.assert_array_almost_equal(result.to_host(), np.sqrt(np.abs(a_arr)), decimal=5)
+
+    def test_cuda_graph_capture_replay(self):
+        a = Tensor(np.arange(16, dtype=np.float32)).to_gpu()
+        nx.set_default_device("gpu")
+        graph = nx.CUDAGraph()
+        graph.capture(lambda: nx.neg(a).eval())
+        graph.replay()
