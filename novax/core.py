@@ -162,6 +162,8 @@ class Tensor:
 
     def to_host(self):
         """Download tensor data to a numpy array."""
+        if not self.is_leaf and self.data is None and self.gpu_ptr is None:
+            return self.eval().to_host()
         if not self.on_gpu or not GPU_AVAILABLE:
             return self.data
         if self.gpu_ptr is None:

@@ -54,6 +54,11 @@ def _is_lazy(t) -> bool:
             and not getattr(t, "on_gpu", False))
 
 
+def _lazy_gpu_no_grad(t) -> bool:
+    """True when a concrete GPU tensor can safely be deferred for fusion."""
+    return _use_gpu(t) and not getattr(t, "requires_grad", False)
+
+
 def _exec_unary(op_name, gpu_fn, cpu_fn, a):
     """Execute a unary op on a concrete tensor and set up autograd if needed."""
     from novax.autograd import attach_unary_grad
@@ -137,7 +142,7 @@ def sqrt(a):
 
 def abs(a):
     from novax.core import Tensor
-    if _is_lazy(a):
+    if _is_lazy(a) or _lazy_gpu_no_grad(a):
         return Tensor(None, op="abs", inputs=[a])
     return _exec_unary("abs", gpu_abs, cpu_abs, a)
 

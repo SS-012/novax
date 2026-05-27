@@ -311,6 +311,12 @@ class TestGPUNewOps:
         result = nx.exp(a)
         np.testing.assert_array_almost_equal(result.to_host(), np.exp([0.0, 1.0]))
 
+    def test_gpu_abs_materializes_on_to_host(self):
+        a = Tensor(np.array([-2.0, 0.0, 3.0], dtype=np.float32)).to_gpu()
+        nx.set_default_device("gpu")
+        result = nx.abs(a)
+        np.testing.assert_array_almost_equal(result.to_host(), [2.0, 0.0, 3.0])
+
     def test_gpu_matmul(self):
         a = Tensor(np.array([[1.0, 2.0], [3.0, 4.0]])).to_gpu()
         b = Tensor(np.array([[5.0, 6.0], [7.0, 8.0]])).to_gpu()
@@ -364,3 +370,10 @@ class TestGPUNewOps:
         result = nx.sigmoid(nx.relu(a * b + c) * a).eval()
         expected = 1.0 / (1.0 + np.exp(-(np.maximum(a_arr * b_arr + c_arr, 0.0) * a_arr)))
         np.testing.assert_array_almost_equal(result.to_host(), expected, decimal=5)
+
+    def test_gpu_lazy_sqrt_abs_chain(self):
+        a_arr = np.linspace(-4.0, 4.0, 64, dtype=np.float32)
+        a = Tensor(a_arr).to_gpu()
+        nx.set_default_device("gpu")
+        result = nx.sqrt(nx.abs(a)).eval()
+        np.testing.assert_array_almost_equal(result.to_host(), np.sqrt(np.abs(a_arr)), decimal=5)
