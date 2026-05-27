@@ -563,10 +563,6 @@ def launch_matmul(a, b):
     if cublas_out is not None:
         return cublas_out
 
-    simple_out = _launch_matmul_simple(a, b, M, K, N)
-    if simple_out is not None:
-        return simple_out
-
     TILE = 16
     kernel_src = f"""
     #define TILE_SIZE {TILE}
@@ -601,49 +597,6 @@ def launch_matmul(a, b):
     func(a.gpu_ptr, b.gpu_ptr, out_gpu,
          np.int32(M), np.int32(K), np.int32(N),
          block=block, grid=grid, stream=stream)
-
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
-    result = Tensor(out_gpu, gpu=True, inputs=[a, b])
-    result.shape = (M, N)
-    result.size = M * N
-    result.dtype = np.float32
-    return result
-
-
-def _launch_matmul_simple(a, b, M: int, K: int, N: int):
-    if M > 128 or N > 256 or K > 256:
-        return None
-
-    kernel_src = """
-    __global__ void matmul_simple_kernel(
-        const float* A, const float* B, float* C,
-        int M, int K, int N
-    ) {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        int total = M * N;
-        if (idx >= total) return;
-        int row = idx / N;
-        int col = idx - row * N;
-        float acc = 0.0f;
-        for (int k = 0; k < K; k++) {
-            acc += A[row * K + k] * B[k * N + col];
-        }
-        C[idx] = acc;
-    }
-    """
-    try:
-        func = get_kernel("matmul_simple_kernel", kernel_src)
-        out_gpu = mempool.alloc(M * N * 4)
-        bs = _optimal_block_size()
-        total = M * N
-        stream = _get_stream()
-        func(a.gpu_ptr, b.gpu_ptr, out_gpu,
-             np.int32(M), np.int32(K), np.int32(N),
-             block=(bs, 1, 1), grid=((total + bs - 1) // bs, 1, 1),
-             stream=stream)
-    except Exception:
-        return None
 
     from importlib import import_module
     Tensor = getattr(import_module("novax.core"), "Tensor")
