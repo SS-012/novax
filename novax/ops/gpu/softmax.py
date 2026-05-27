@@ -1,6 +1,9 @@
-from novax.ops.launcher import launch_reduce, launch_kernel
+from novax.ops.launcher import launch_reduce, launch_kernel, launch_softmax
 
 def softmax(a):
+    if len(a.shape) == 1:
+        return launch_softmax(a)
+
     # Step 1: max for numerical stability
     max_val = launch_reduce(a, "softmax_max_reduce", "max")
     # Step 2: x - max (broadcast scalar subtraction)

@@ -305,6 +305,75 @@ def launch_reduce(a, op_name: str, reduce_type: str):
     return result
 
 
+def launch_softmax(a):
+    """
+    Single-kernel softmax for 1D tensors.
+
+    The kernel uses one cooperative block that loops over the vector for max,
+    sum(exp(x - max)), and output normalization. This is tuned for launch-bound
+    medium vectors where avoiding five separate kernels matters more than using
+    every SM.
+    """
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    assert a.on_gpu, "Input tensor must be on GPU"
+    assert len(a.shape) == 1, "launch_softmax currently supports 1D tensors"
+
+    BS = 256
+    kernel_src = f"""
+    #define BS {BS}
+    __global__ void softmax_1d_kernel(const float* x, float* out, int n) {{
+        __shared__ float smem[BS];
+        int tid = threadIdx.x;
+
+        float local_max = -3.402823e+38f;
+        for (int i = tid; i < n; i += BS) {{
+            local_max = fmaxf(local_max, x[i]);
+        }}
+        smem[tid] = local_max;
+        __syncthreads();
+        for (int stride = BS / 2; stride > 0; stride >>= 1) {{
+            if (tid < stride) {{
+                smem[tid] = fmaxf(smem[tid], smem[tid + stride]);
+            }}
+            __syncthreads();
+        }}
+        float max_val = smem[0];
+
+        float local_sum = 0.0f;
+        for (int i = tid; i < n; i += BS) {{
+            local_sum += expf(x[i] - max_val);
+        }}
+        smem[tid] = local_sum;
+        __syncthreads();
+        for (int stride = BS / 2; stride > 0; stride >>= 1) {{
+            if (tid < stride) {{
+                smem[tid] += smem[tid + stride];
+            }}
+            __syncthreads();
+        }}
+        float denom = smem[0];
+
+        for (int i = tid; i < n; i += BS) {{
+            out[i] = expf(x[i] - max_val) / denom;
+        }}
+    }}
+    """
+    func = get_kernel("softmax_1d_kernel", kernel_src)
+    out_gpu = mempool.alloc(a.size * 4)
+    stream = _get_stream()
+    func(a.gpu_ptr, out_gpu, np.int32(a.size),
+         block=(BS, 1, 1), grid=(1, 1, 1), stream=stream)
+
+    from importlib import import_module
+    Tensor = getattr(import_module("novax.core"), "Tensor")
+    result = Tensor(out_gpu, gpu=True, inputs=[a])
+    result.shape = a.shape
+    result.size = a.size
+    result.dtype = np.float32
+    return result
+
+
 def launch_matmul(a, b):
     """
     Tiled matrix multiplication using shared memory.
