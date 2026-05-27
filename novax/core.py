@@ -168,14 +168,17 @@ class Tensor:
             return self.data
         if self.gpu_ptr is None:
             raise RuntimeError("Cannot call to_host() — tensor not on GPU.")
+        s = None
         try:
             from novax.ops.launcher import _get_stream
             s = _get_stream()
-            if s is not None:
-                s.synchronize()
         except Exception:
             cuda.Context.synchronize()
         out = np.empty(self.shape, self.dtype)
+        if s is not None:
+            cuda.memcpy_dtoh_async(out, self.gpu_ptr, s)
+            s.synchronize()
+            return out
         cuda.memcpy_dtoh(out, self.gpu_ptr)
         return out
 
