@@ -42,13 +42,13 @@ _REDUCE_OPS = frozenset({"sum", "mean", "max", "min"})
 _BINARY_OPS = frozenset({"add", "sub", "mul", "div", "pow"})
 
 _UNARY_CUDA_EXPR = {
-    "exp":     "__expf(a[idx])",
+    "exp":     "expf(a[idx])",
     "log":     "logf(a[idx])",
     "sqrt":    "sqrtf(a[idx])",
     "abs":     "fabsf(a[idx])",
     "neg":     "(-a[idx])",
     "relu":    "fmaxf(0.0f, a[idx])",
-    "sigmoid": "(1.0f / (1.0f + __expf(-a[idx])))",
+    "sigmoid": "(1.0f / (1.0f + expf(-a[idx])))",
     "tanh":    "tanhf(a[idx])",
 }
 
@@ -457,13 +457,13 @@ class Tensor:
 
         _binary_sym = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
         _unary_cuda = {
-            "exp":     "__expf({e})",
+            "exp":     "expf({e})",
             "log":     "logf({e})",
             "sqrt":    "sqrtf({e})",
             "abs":     "fabsf({e})",
             "neg":     "(-({e}))",
             "relu":    "fmaxf(0.0f, {e})",
-            "sigmoid": "(1.0f / (1.0f + __expf(-({e}))))",
+            "sigmoid": "(1.0f / (1.0f + expf(-({e}))))",
             "tanh":    "tanhf({e})",
         }
 

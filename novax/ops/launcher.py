@@ -450,7 +450,7 @@ def launch_softmax(a):
 
         float local_sum = 0.0f;
         for (int i = tid; i < n; i += BS) {{
-            local_sum += __expf(x[i] - max_val);
+            local_sum += expf(x[i] - max_val);
         }}
         smem[tid] = local_sum;
         __syncthreads();
@@ -463,7 +463,7 @@ def launch_softmax(a):
         float denom = smem[0];
 
         for (int i = tid; i < n; i += BS) {{
-            out[i] = __expf(x[i] - max_val) / denom;
+            out[i] = expf(x[i] - max_val) / denom;
         }}
     }}
     """
