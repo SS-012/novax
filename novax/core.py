@@ -539,6 +539,12 @@ class Tensor:
         except Exception:
             pass
 
+    def __del__(self):
+        try:
+            self.free()
+        except Exception:
+            pass
+
     def __repr__(self):
         device = "GPU" if self.on_gpu else "CPU"
         shape = self.shape if self.shape is not None else "?"
