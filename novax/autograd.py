@@ -149,8 +149,8 @@ def attach_matmul_grad(out, left, right):
     if getattr(right, "requires_grad", False):
         out._prev.add(right)
 
-    left_arr = (left.to_host() if left.on_gpu else left.data) if getattr(right, "requires_grad", False) else None
-    right_arr = (right.to_host() if right.on_gpu else right.data) if getattr(left, "requires_grad", False) else None
+    left_arr = left.to_host() if left.on_gpu else left.data
+    right_arr = right.to_host() if right.on_gpu else right.data
 
     def _bwd(left=left, right=right, left_arr=left_arr, right_arr=right_arr, out=out):
         g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
