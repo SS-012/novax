@@ -72,6 +72,7 @@ class CUDAGraph:
             raise RuntimeError("Capture allocated fewer buffers than the warm trace")
         _check(self._cudart.cudaGraphInstantiate(ctypes.byref(self._exec), self._graph, ctypes.c_ulonglong(0)),
                "cudaGraphInstantiate")
+        _check(self._cudart.cudaGraphUpload(self._exec, stream_handle), "cudaGraphUpload")
 
     def replay(self):
         if not self._exec.value:
@@ -118,6 +119,8 @@ def _load_cudart():
             lib.cudaGraphInstantiate.restype = ctypes.c_int
             lib.cudaGraphLaunch.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
             lib.cudaGraphLaunch.restype = ctypes.c_int
+            lib.cudaGraphUpload.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            lib.cudaGraphUpload.restype = ctypes.c_int
             lib.cudaGraphDestroy.argtypes = [ctypes.c_void_p]
             lib.cudaGraphDestroy.restype = ctypes.c_int
             lib.cudaGraphExecDestroy.argtypes = [ctypes.c_void_p]
