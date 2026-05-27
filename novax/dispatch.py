@@ -10,6 +10,10 @@ except Exception:
     GPU_AVAILABLE = False
 
 DEFAULT_DEVICE = "gpu" if GPU_AVAILABLE else "cpu"
+_tensor_cls = None
+_attach_unary_grad_fn = None
+_attach_binary_grad_fn = None
+_attach_matmul_grad_fn = None
 
 try:
     from novax.ops.gpu import (
@@ -37,6 +41,38 @@ from novax.ops.cpu import (
 )
 
 
+def _get_tensor_cls():
+    global _tensor_cls
+    if _tensor_cls is None:
+        from novax.core import Tensor
+        _tensor_cls = Tensor
+    return _tensor_cls
+
+
+def _get_attach_unary_grad():
+    global _attach_unary_grad_fn
+    if _attach_unary_grad_fn is None:
+        from novax.autograd import attach_unary_grad
+        _attach_unary_grad_fn = attach_unary_grad
+    return _attach_unary_grad_fn
+
+
+def _get_attach_binary_grad():
+    global _attach_binary_grad_fn
+    if _attach_binary_grad_fn is None:
+        from novax.autograd import attach_binary_grad
+        _attach_binary_grad_fn = attach_binary_grad
+    return _attach_binary_grad_fn
+
+
+def _get_attach_matmul_grad():
+    global _attach_matmul_grad_fn
+    if _attach_matmul_grad_fn is None:
+        from novax.autograd import attach_matmul_grad
+        _attach_matmul_grad_fn = attach_matmul_grad
+    return _attach_matmul_grad_fn
+
+
 def _use_gpu(a, b=None):
     if DEFAULT_DEVICE != "gpu" or not GPU_AVAILABLE:
         return False
@@ -61,17 +97,15 @@ def _lazy_gpu_no_grad(t) -> bool:
 
 def _exec_unary(op_name, gpu_fn, cpu_fn, a):
     """Execute a unary op on a concrete tensor and set up autograd if needed."""
-    from novax.autograd import attach_unary_grad
     out = gpu_fn(a) if (_use_gpu(a) and gpu_fn) else cpu_fn(a)
-    attach_unary_grad(out, a, op_name)
+    _get_attach_unary_grad()(out, a, op_name)
     return out
 
 
 def _exec_binary(op_name, gpu_fn, cpu_fn, a, b):
     """Execute a binary op on concrete tensors and set up autograd if needed."""
-    from novax.autograd import attach_binary_grad
     out = gpu_fn(a, b) if (_use_gpu(a, b) and gpu_fn) else cpu_fn(a, b)
-    attach_binary_grad(out, a, b, op_name)
+    _get_attach_binary_grad()(out, a, b, op_name)
     return out
 
 
@@ -80,42 +114,41 @@ def _exec_binary(op_name, gpu_fn, cpu_fn, a, b):
 # ---------------------------------------------------------------------------
 
 def add(a, b):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a) or _is_lazy(b):
         return Tensor(None, op="add", inputs=[a, a._wrap(b) if hasattr(a, "_wrap") else b])
     return _exec_binary("add", gpu_add, cpu_add, a, b)
 
 def sub(a, b):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a) or _is_lazy(b):
         return Tensor(None, op="sub", inputs=[a, a._wrap(b) if hasattr(a, "_wrap") else b])
     return _exec_binary("sub", gpu_sub, cpu_sub, a, b)
 
 def mul(a, b):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a) or _is_lazy(b):
         return Tensor(None, op="mul", inputs=[a, a._wrap(b) if hasattr(a, "_wrap") else b])
     return _exec_binary("mul", gpu_mul, cpu_mul, a, b)
 
 def div(a, b):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a) or _is_lazy(b):
         return Tensor(None, op="div", inputs=[a, a._wrap(b) if hasattr(a, "_wrap") else b])
     return _exec_binary("div", gpu_div, cpu_div, a, b)
 
 def pow(a, b):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a) or _is_lazy(b):
         return Tensor(None, op="pow", inputs=[a, a._wrap(b) if hasattr(a, "_wrap") else b])
     return _exec_binary("pow", gpu_pow, cpu_pow, a, b)
 
 def matmul(a, b):
-    from novax.core import Tensor
-    from novax.autograd import attach_matmul_grad
+    Tensor = _get_tensor_cls()
     if _is_lazy(a) or _is_lazy(b):
         return Tensor(None, op="matmul", inputs=[a, b])
     out = gpu_matmul(a, b) if (_use_gpu(a, b) and gpu_matmul) else cpu_matmul(a, b)
-    attach_matmul_grad(out, a, b)
+    _get_attach_matmul_grad()(out, a, b)
     return out
 
 # ---------------------------------------------------------------------------
@@ -123,31 +156,31 @@ def matmul(a, b):
 # ---------------------------------------------------------------------------
 
 def exp(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="exp", inputs=[a])
     return _exec_unary("exp", gpu_exp, cpu_exp, a)
 
 def log(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="log", inputs=[a])
     return _exec_unary("log", gpu_log, cpu_log, a)
 
 def sqrt(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="sqrt", inputs=[a])
     return _exec_unary("sqrt", gpu_sqrt, cpu_sqrt, a)
 
 def abs(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a) or _lazy_gpu_no_grad(a):
         return Tensor(None, op="abs", inputs=[a])
     return _exec_unary("abs", gpu_abs, cpu_abs, a)
 
 def neg(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="neg", inputs=[a])
     return _exec_unary("neg", gpu_neg, cpu_neg, a)
@@ -157,25 +190,25 @@ def neg(a):
 # ---------------------------------------------------------------------------
 
 def relu(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="relu", inputs=[a])
     return _exec_unary("relu", gpu_relu, cpu_relu, a)
 
 def sigmoid(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="sigmoid", inputs=[a])
     return _exec_unary("sigmoid", gpu_sigmoid, cpu_sigmoid, a)
 
 def tanh(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="tanh", inputs=[a])
     return _exec_unary("tanh", gpu_tanh, cpu_tanh, a)
 
 def softmax(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="softmax", inputs=[a])
     return _exec_unary("softmax", gpu_softmax, cpu_softmax, a)
@@ -185,25 +218,25 @@ def softmax(a):
 # ---------------------------------------------------------------------------
 
 def sum(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="sum", inputs=[a])
     return _exec_unary("sum", gpu_sum, cpu_sum, a)
 
 def mean(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="mean", inputs=[a])
     return _exec_unary("mean", gpu_mean, cpu_mean, a)
 
 def max(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="max", inputs=[a])
     return _exec_unary("max", gpu_max, cpu_max, a)
 
 def min(a):
-    from novax.core import Tensor
+    Tensor = _get_tensor_cls()
     if _is_lazy(a):
         return Tensor(None, op="min", inputs=[a])
     return _exec_unary("min", gpu_min, cpu_min, a)
