@@ -667,10 +667,8 @@ def launch_matmul(a, b):
     return result
 
 
-def _launch_matmul_cublas(a, b, M: int, K: int, N: int, allow_rectangular: bool = False):
-    square_gemm = M == K and K == N and M >= 128
-    rectangular_gemm = allow_rectangular and M >= 256 and K >= 256 and N >= 256
-    if not (square_gemm or rectangular_gemm):
+def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
+    if M != K or K != N or M < 128:
         return None
     lib, handle = _get_cublas()
     if lib is None or handle is None:
@@ -725,15 +723,6 @@ def launch_matmul_bias_relu(x, w, bias):
     K2, N = w.shape
     assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
-
-    cublas_out = _launch_matmul_cublas(x, w, M, K, N, allow_rectangular=True)
-    if cublas_out is not None:
-        return launch_kernel(
-            cublas_out,
-            bias,
-            "matmul_cublas_bias_relu_kernel",
-            "fmaxf(0.0f, a[idx] + b[idx])",
-        )
 
     TILE = 16
     kernel_src = f"""
