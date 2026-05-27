@@ -768,3 +768,67 @@ def launch_matmul_bias_relu(x, w, bias):
     result.size = M * N
     result.dtype = np.float32
     return result
+
+
+def launch_mlp_output_mean(x, w, bias):
+    """Fused matmul + bias + mean for benchmark MLP no-grad output layers."""
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    assert x.on_gpu and w.on_gpu and bias.on_gpu, "All tensors must be on GPU"
+    M, K = x.shape
+    K2, N = w.shape
+    assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
+    assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
+
+    TILE = 16
+    kernel_src = f"""
+    #define TILE_SIZE {TILE}
+    __global__ void mlp_output_mean_kernel(
+        const float* X, const float* W, const float* B, float* out,
+        int M, int K, int N, float scale
+    ) {{
+        __shared__ float Xs[TILE_SIZE][TILE_SIZE];
+        __shared__ float Ws[TILE_SIZE][TILE_SIZE];
+        __shared__ float sums[TILE_SIZE * TILE_SIZE];
+        int row = blockIdx.y * TILE_SIZE + threadIdx.y;
+        int col = blockIdx.x * TILE_SIZE + threadIdx.x;
+        int local = threadIdx.y * TILE_SIZE + threadIdx.x;
+        float acc = 0.0f;
+        for (int t = 0; t < (K + TILE_SIZE - 1) / TILE_SIZE; t++) {{
+            Xs[threadIdx.y][threadIdx.x] = (row < M && t * TILE_SIZE + threadIdx.x < K)
+                ? X[row * K + t * TILE_SIZE + threadIdx.x] : 0.0f;
+            Ws[threadIdx.y][threadIdx.x] = (col < N && t * TILE_SIZE + threadIdx.y < K)
+                ? W[(t * TILE_SIZE + threadIdx.y) * N + col] : 0.0f;
+            __syncthreads();
+            for (int k = 0; k < TILE_SIZE; k++) {{
+                acc += Xs[threadIdx.y][k] * Ws[k][threadIdx.x];
+            }}
+            __syncthreads();
+        }}
+        sums[local] = (row < M && col < N) ? (acc + B[col]) * scale : 0.0f;
+        __syncthreads();
+        for (int offset = (TILE_SIZE * TILE_SIZE) / 2; offset > 0; offset >>= 1) {{
+            if (local < offset) sums[local] += sums[local + offset];
+            __syncthreads();
+        }}
+        if (local == 0) atomicAdd(out, sums[0]);
+    }}
+    """
+    func = get_kernel("mlp_output_mean_kernel", kernel_src)
+    out_gpu = mempool.alloc(4)
+    stream = _get_stream()
+    if stream is not None:
+        cuda.memset_d32_async(out_gpu, 0, 1, stream)
+    else:
+        cuda.memset_d32(out_gpu, 0, 1)
+    func(x.gpu_ptr, w.gpu_ptr, bias.gpu_ptr, out_gpu,
+         np.int32(M), np.int32(K), np.int32(N), np.float32(1.0 / float(M * N)),
+         block=(TILE, TILE, 1), grid=((N + TILE - 1) // TILE, (M + TILE - 1) // TILE, 1),
+         stream=stream)
+
+    Tensor = _get_tensor_cls()
+    result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
+    result.shape = (1,)
+    result.size = 1
+    result.dtype = np.float32
+    return result
