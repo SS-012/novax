@@ -33,11 +33,9 @@ def attach_unary_grad(out, inp, op: str):
         return
     out.requires_grad = True
     out._prev = {inp}
-    inp_shape = inp.shape
-    inp_size = inp.size
-    inp_data = None if op in ("sum", "mean") else (inp.to_host() if inp.on_gpu else inp.data)
+    inp_data = inp.to_host() if inp.on_gpu else inp.data
 
-    def _bwd(inp=inp, inp_data=inp_data, inp_shape=inp_shape, inp_size=inp_size, out=out, op=op):
+    def _bwd(inp=inp, inp_data=inp_data, out=out, op=op):
         g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
         if op == "neg":
             dL = -g
@@ -59,9 +57,9 @@ def attach_unary_grad(out, inp, op: str):
             t = np.tanh(inp_data)
             dL = g * (1.0 - t ** 2)
         elif op == "sum":
-            dL = np.full(inp_shape, float(g.flat[0]), dtype=np.float32)
+            dL = np.full(inp_data.shape, float(g.flat[0]), dtype=np.float32)
         elif op == "mean":
-            dL = np.full(inp_shape, float(g.flat[0]) / float(inp_size), dtype=np.float32)
+            dL = np.full(inp_data.shape, float(g.flat[0]) / float(inp_data.size), dtype=np.float32)
         elif op == "max":
             mask = (inp_data == np.max(inp_data)).astype(np.float32)
             mask /= np.sum(mask)
@@ -103,13 +101,10 @@ def attach_binary_grad(out, left, right, op: str):
     if getattr(right, "requires_grad", False):
         out._prev.add(right)
 
-    left_shape = left.shape
-    right_shape = right.shape
-    needs_values = op not in ("add", "sub")
-    left_arr = left.to_host() if needs_values and left.on_gpu else (left.data if needs_values else None)
-    right_arr = right.to_host() if needs_values and right.on_gpu else (right.data if needs_values else None)
+    left_arr = left.to_host() if left.on_gpu else left.data
+    right_arr = right.to_host() if right.on_gpu else right.data
 
-    def _bwd(left=left, right=right, left_arr=left_arr, right_arr=right_arr, left_shape=left_shape, right_shape=right_shape, out=out, op=op):
+    def _bwd(left=left, right=right, left_arr=left_arr, right_arr=right_arr, out=out, op=op):
         g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
         if op == "add":
             dL, dR = g, g
@@ -125,15 +120,14 @@ def attach_binary_grad(out, left, right, op: str):
             dL = g * right_arr * np.power(np.abs(left_arr) + 1e-12, right_arr - 1)
             dR = g * np.power(np.abs(left_arr) + 1e-12, right_arr) * np.log(np.abs(left_arr) + 1e-12)
         else:
-            dL = np.zeros(left_shape, dtype=np.float32)
-            dR = np.zeros(right_shape, dtype=np.float32)
+            dL = dR = np.zeros_like(left_arr)
 
         if getattr(left, "requires_grad", False):
-            dL = _unbroadcast(np.array(dL, dtype=np.float32), left_shape)
+            dL = _unbroadcast(np.array(dL, dtype=np.float32), left_arr.shape)
             acc = left.grad.data + dL if left.grad is not None else dL.copy()
             left.grad = Tensor(acc.astype(np.float32))
         if getattr(right, "requires_grad", False):
-            dR = _unbroadcast(np.array(dR, dtype=np.float32), right_shape)
+            dR = _unbroadcast(np.array(dR, dtype=np.float32), right_arr.shape)
             acc = right.grad.data + dR if right.grad is not None else dR.copy()
             right.grad = Tensor(acc.astype(np.float32))
 
