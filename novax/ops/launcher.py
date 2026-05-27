@@ -689,7 +689,7 @@ def launch_matmul_bias_relu(x, w, bias):
         }}
         if (row < M && col < N) {{
             float val = acc + B[col];
-            C[row * N + col] = (val > 0.0f ? val : 0.0f);
+            C[row * N + col] = fmaxf(0.0f, val);
         }}
     }}
     """
