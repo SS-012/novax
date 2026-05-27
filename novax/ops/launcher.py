@@ -21,7 +21,6 @@ _stream = None
 _cublas_lib = None
 _cublas_handle = None
 _tensor_cls = None
-_block_size_cache = None
 
 _CUBLAS_OP_N = 0
 
@@ -185,11 +184,7 @@ def _get_tensor_cls():
 
 def _optimal_block_size() -> int:
     """Returns the largest warp-aligned block size supported by the current device."""
-    global _block_size_cache
-    if _block_size_cache is not None:
-        return _block_size_cache
     if cuda is None:
-        _block_size_cache = 256
         return 256
     try:
         max_threads = cuda.Device(0).get_attribute(
@@ -197,11 +192,9 @@ def _optimal_block_size() -> int:
         )
         for size in [512, 256, 128]:
             if size <= max_threads:
-                _block_size_cache = size
                 return size
     except Exception:
         pass
-    _block_size_cache = 256
     return 256
 
 
