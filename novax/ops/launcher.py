@@ -1,3 +1,7 @@
+import atexit
+import ctypes
+import os
+
 import numpy as np
 try:
     import pycuda.driver as cuda
@@ -14,6 +18,10 @@ from novax.utils import mempool
 _kernel_cache = {}
 # Lazily create streams only after a CUDA context exists; default to None
 _stream = None
+_cublas_lib = None
+_cublas_handle = None
+
+_CUBLAS_OP_N = 0
 
 
 def _broadcast_index_expr(t, output_shape, output_size, idx_expr="idx"):
@@ -80,6 +88,89 @@ def _get_stream():
         except Exception:
             _stream = None
     return _stream
+
+
+def _cublas_candidates():
+    names = ("cublas64_13.dll", "cublas64_12.dll", "cublas64_11.dll")
+    roots = []
+    cuda_path = os.environ.get("CUDA_PATH")
+    if cuda_path:
+        roots.extend([
+            os.path.join(cuda_path, "bin", "x64"),
+            os.path.join(cuda_path, "bin"),
+        ])
+    return [os.path.join(root, name) for root in roots for name in names]
+
+
+def _destroy_cublas():
+    global _cublas_handle
+    if _cublas_lib is not None and _cublas_handle is not None:
+        try:
+            _cublas_lib.cublasDestroy_v2(_cublas_handle)
+        except Exception:
+            pass
+        _cublas_handle = None
+
+
+def _get_cublas():
+    global _cublas_lib, _cublas_handle
+    if _cublas_handle is not None:
+        return _cublas_lib, _cublas_handle
+    if _cublas_lib is False:
+        return None, None
+
+    for path in _cublas_candidates():
+        if not os.path.exists(path):
+            continue
+        try:
+            dll_dir = os.path.dirname(path)
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(dll_dir)
+            lib = ctypes.CDLL(path)
+            lib.cublasCreate_v2.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+            lib.cublasCreate_v2.restype = ctypes.c_int
+            lib.cublasDestroy_v2.argtypes = [ctypes.c_void_p]
+            lib.cublasDestroy_v2.restype = ctypes.c_int
+            lib.cublasSetStream_v2.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            lib.cublasSetStream_v2.restype = ctypes.c_int
+            lib.cublasSgemm_v2.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            lib.cublasSgemm_v2.restype = ctypes.c_int
+            handle = ctypes.c_void_p()
+            if lib.cublasCreate_v2(ctypes.byref(handle)) == 0:
+                _cublas_lib = lib
+                _cublas_handle = handle
+                atexit.register(_destroy_cublas)
+                return _cublas_lib, _cublas_handle
+        except Exception:
+            continue
+
+    _cublas_lib = False
+    return None, None
+
+
+def _set_cublas_stream(lib, handle):
+    stream = _get_stream()
+    if stream is None:
+        return
+    try:
+        lib.cublasSetStream_v2(handle, ctypes.c_void_p(int(stream.handle)))
+    except Exception:
+        pass
 
 
 def _optimal_block_size() -> int:
@@ -389,6 +480,10 @@ def launch_matmul(a, b):
     K2, N = b.shape
     assert K == K2, f"Shape mismatch for matmul: {a.shape} @ {b.shape}"
 
+    cublas_out = _launch_matmul_cublas(a, b, M, K, N)
+    if cublas_out is not None:
+        return cublas_out
+
     TILE = 16
     kernel_src = f"""
     #define TILE_SIZE {TILE}
@@ -423,6 +518,50 @@ def launch_matmul(a, b):
     func(a.gpu_ptr, b.gpu_ptr, out_gpu,
          np.int32(M), np.int32(K), np.int32(N),
          block=block, grid=grid, stream=stream)
+
+    from importlib import import_module
+    Tensor = getattr(import_module("novax.core"), "Tensor")
+    result = Tensor(out_gpu, gpu=True, inputs=[a, b])
+    result.shape = (M, N)
+    result.size = M * N
+    result.dtype = np.float32
+    return result
+
+
+def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
+    if min(M, K, N) < 128:
+        return None
+    lib, handle = _get_cublas()
+    if lib is None or handle is None:
+        return None
+
+    out_gpu = mempool.alloc(M * N * 4)
+    alpha = ctypes.c_float(1.0)
+    beta = ctypes.c_float(0.0)
+    _set_cublas_stream(lib, handle)
+    try:
+        status = lib.cublasSgemm_v2(
+            handle,
+            _CUBLAS_OP_N,
+            _CUBLAS_OP_N,
+            ctypes.c_int(N),
+            ctypes.c_int(M),
+            ctypes.c_int(K),
+            ctypes.byref(alpha),
+            ctypes.c_void_p(int(b.gpu_ptr)),
+            ctypes.c_int(N),
+            ctypes.c_void_p(int(a.gpu_ptr)),
+            ctypes.c_int(K),
+            ctypes.byref(beta),
+            ctypes.c_void_p(int(out_gpu)),
+            ctypes.c_int(N),
+        )
+    except Exception:
+        mempool.free(out_gpu, M * N * 4)
+        return None
+    if status != 0:
+        mempool.free(out_gpu, M * N * 4)
+        return None
 
     from importlib import import_module
     Tensor = getattr(import_module("novax.core"), "Tensor")
