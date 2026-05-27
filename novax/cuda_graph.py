@@ -25,8 +25,9 @@ class CUDAGraph:
             raise RuntimeError("CUDA stream is not available for graph capture")
 
         # Warm once so kernels and cuBLAS handles are compiled/initialized before capture.
-        fn()
+        warm_output = fn()
         cuda.Context.synchronize()
+        del warm_output
 
         sizes = []
         original_alloc = mempool.alloc
@@ -37,8 +38,9 @@ class CUDAGraph:
 
         mempool.alloc = recording_alloc
         try:
-            fn()
+            traced_output = fn()
             cuda.Context.synchronize()
+            del traced_output
         finally:
             mempool.alloc = original_alloc
 
@@ -55,9 +57,10 @@ class CUDAGraph:
 
         stream_handle = ctypes.c_void_p(int(self._stream.handle))
         mempool.alloc = graph_alloc
+        captured_output = None
         try:
             _check(self._cudart.cudaStreamBeginCapture(stream_handle, ctypes.c_int(0)), "cudaStreamBeginCapture")
-            fn()
+            captured_output = fn()
             _check(self._cudart.cudaStreamEndCapture(stream_handle, ctypes.byref(self._graph)), "cudaStreamEndCapture")
         except Exception:
             try:
@@ -67,6 +70,7 @@ class CUDAGraph:
             raise
         finally:
             mempool.alloc = original_alloc
+            del captured_output
 
         if index != len(self._buffers):
             raise RuntimeError("Capture allocated fewer buffers than the warm trace")
