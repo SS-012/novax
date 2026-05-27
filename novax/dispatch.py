@@ -148,7 +148,7 @@ def abs(a):
 
 def neg(a):
     from novax.core import Tensor
-    if _is_lazy(a) or _lazy_gpu_no_grad(a):
+    if _is_lazy(a):
         return Tensor(None, op="neg", inputs=[a])
     return _exec_unary("neg", gpu_neg, cpu_neg, a)
 
