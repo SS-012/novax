@@ -20,6 +20,7 @@ _kernel_cache = {}
 _stream = None
 _cublas_lib = None
 _cublas_handle = None
+_tensor_cls = None
 
 _CUBLAS_OP_N = 0
 
@@ -173,6 +174,14 @@ def _set_cublas_stream(lib, handle):
         pass
 
 
+def _get_tensor_cls():
+    global _tensor_cls
+    if _tensor_cls is None:
+        from importlib import import_module
+        _tensor_cls = getattr(import_module("novax.core"), "Tensor")
+    return _tensor_cls
+
+
 def _optimal_block_size() -> int:
     """Returns the largest warp-aligned block size supported by the current device."""
     if cuda is None:
@@ -291,8 +300,7 @@ def launch_kernel(a, b=None, op_name: str = "custom_kernel", expr: str = None, s
     else:
         func(a.gpu_ptr, b.gpu_ptr, out_gpu, np.int32(n), block=block, grid=grid, stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _get_tensor_cls()
     return Tensor(out_gpu, gpu=True, inputs=[a, b] if b else [a])
 
 
@@ -326,8 +334,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n)]
     stream = _get_stream()
     func(*args, block=block, grid=grid, stream=stream)
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _get_tensor_cls()
     return Tensor(out_gpu, gpu=True, inputs=inputs)
 
 
@@ -418,8 +425,7 @@ def launch_reduce(a, op_name: str, reduce_type: str, scale: float = 1.0):
                   block=(BS, 1, 1), grid=(1, 1, 1),
                   shared=BS * 4, stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _get_tensor_cls()
     result = Tensor(final_gpu, gpu=True, inputs=[a])
     result.shape = (1,)
     result.size = 1
@@ -468,8 +474,7 @@ def _launch_sum_atomic(a, op_name: str, scale: float):
     except Exception:
         return None
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _get_tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[a])
     result.shape = (1,)
     result.size = 1
@@ -537,8 +542,7 @@ def launch_softmax(a):
     func(a.gpu_ptr, out_gpu, np.int32(a.size),
          block=(BS, 1, 1), grid=(1, 1, 1), stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _get_tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[a])
     result.shape = a.shape
     result.size = a.size
@@ -598,8 +602,7 @@ def launch_matmul(a, b):
          np.int32(M), np.int32(K), np.int32(N),
          block=block, grid=grid, stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _get_tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[a, b])
     result.shape = (M, N)
     result.size = M * N
@@ -642,8 +645,7 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
         mempool.free(out_gpu, M * N * 4)
         return None
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _get_tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[a, b])
     result.shape = (M, N)
     result.size = M * N
@@ -703,8 +705,7 @@ def launch_matmul_bias_relu(x, w, bias):
          np.int32(M), np.int32(K), np.int32(N),
          block=block, grid=grid, stream=stream)
 
-    from importlib import import_module
-    Tensor = getattr(import_module("novax.core"), "Tensor")
+    Tensor = _get_tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
     result.shape = (M, N)
     result.size = M * N
