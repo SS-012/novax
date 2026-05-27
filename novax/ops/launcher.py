@@ -338,6 +338,79 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     return Tensor(out_gpu, gpu=True, inputs=inputs)
 
 
+def launch_binary_float4(a, b, op_name: str, op_symbol: str):
+    """Vectorized same-shape binary float32 kernel for simple bandwidth ops."""
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    if not (a.on_gpu and b.on_gpu and a.shape == b.shape and a.size % 4 == 0):
+        return None
+
+    n4 = a.size // 4
+    kernel_src = f"""
+    __global__ void {op_name}(const float* a, const float* b, float* out, int n4) {{
+        int idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx < n4) {{
+            const float4 av = reinterpret_cast<const float4*>(a)[idx];
+            const float4 bv = reinterpret_cast<const float4*>(b)[idx];
+            reinterpret_cast<float4*>(out)[idx] = make_float4(
+                av.x {op_symbol} bv.x,
+                av.y {op_symbol} bv.y,
+                av.z {op_symbol} bv.z,
+                av.w {op_symbol} bv.w
+            );
+        }}
+    }}
+    """
+    func = get_kernel(op_name, kernel_src)
+    out_gpu = mempool.alloc(a.size * 4)
+    bs = _optimal_block_size()
+    stream = _get_stream()
+    func(a.gpu_ptr, b.gpu_ptr, out_gpu, np.int32(n4),
+         block=(bs, 1, 1), grid=((n4 + bs - 1) // bs, 1, 1), stream=stream)
+    Tensor = _get_tensor_cls()
+    result = Tensor(out_gpu, gpu=True, inputs=[a, b])
+    result.shape = a.shape
+    result.size = a.size
+    result.dtype = np.float32
+    return result
+
+
+def launch_unary_float4(a, op_name: str, expr_template: str):
+    """Vectorized same-shape unary float32 kernel for simple bandwidth ops."""
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    if not (a.on_gpu and a.size % 4 == 0):
+        return None
+
+    n4 = a.size // 4
+    comps = ",\n                ".join(
+        expr_template.format(c=c) for c in ("x", "y", "z", "w")
+    )
+    kernel_src = f"""
+    __global__ void {op_name}(const float* a, float* out, int n4) {{
+        int idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx < n4) {{
+            const float4 av = reinterpret_cast<const float4*>(a)[idx];
+            reinterpret_cast<float4*>(out)[idx] = make_float4(
+                {comps}
+            );
+        }}
+    }}
+    """
+    func = get_kernel(op_name, kernel_src)
+    out_gpu = mempool.alloc(a.size * 4)
+    bs = _optimal_block_size()
+    stream = _get_stream()
+    func(a.gpu_ptr, out_gpu, np.int32(n4),
+         block=(bs, 1, 1), grid=((n4 + bs - 1) // bs, 1, 1), stream=stream)
+    Tensor = _get_tensor_cls()
+    result = Tensor(out_gpu, gpu=True, inputs=[a])
+    result.shape = a.shape
+    result.size = a.size
+    result.dtype = np.float32
+    return result
+
+
 def launch_reduce(a, op_name: str, reduce_type: str, scale: float = 1.0):
     """
     Two-pass parallel reduction kernel using shared memory.
