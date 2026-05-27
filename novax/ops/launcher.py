@@ -563,7 +563,7 @@ def launch_matmul(a, b):
     if cublas_out is not None:
         return cublas_out
 
-    TILE = 16
+    TILE = 32
     kernel_src = f"""
     #define TILE_SIZE {TILE}
     __global__ void matmul_kernel(
