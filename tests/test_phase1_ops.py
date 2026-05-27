@@ -341,7 +341,7 @@ class TestGPUNewOps:
         assert abs(float(result.to_host()[0]) - 10.0) < 1e-4
 
     def test_gpu_large_sum_and_mean(self):
-        arr = np.linspace(-1.0, 1.0, 10000, dtype=np.float32)
+        arr = np.linspace(-1.0, 1.0, 65536, dtype=np.float32)
         a = Tensor(arr).to_gpu()
         nx.set_default_device("gpu")
         sum_result = nx.sum(a)
