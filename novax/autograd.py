@@ -33,52 +33,43 @@ def attach_unary_grad(out, inp, op: str):
         return
     out.requires_grad = True
     out._prev = {inp}
-    inp_shape = inp.shape
-    inp_size = inp.size
+    inp_data = inp.to_host() if inp.on_gpu else inp.data
 
-    def _bwd(inp=inp, inp_shape=inp_shape, inp_size=inp_size, out=out, op=op):
+    def _bwd(inp=inp, inp_data=inp_data, out=out, op=op):
         g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
         if op == "neg":
             dL = -g
         elif op == "exp":
             out_arr = out.to_host() if out.on_gpu else out.data
             dL = g * out_arr
-        elif op == "sum":
-            dL = np.full(inp_shape, float(g.flat[0]), dtype=np.float32)
-        elif op == "mean":
-            dL = np.full(inp_shape, float(g.flat[0]) / float(inp_size), dtype=np.float32)
         elif op == "log":
-            inp_data = inp.to_host() if inp.on_gpu else inp.data
             dL = g / inp_data
         elif op == "sqrt":
-            inp_data = inp.to_host() if inp.on_gpu else inp.data
             dL = g / (2.0 * np.sqrt(np.maximum(inp_data, 1e-12)))
         elif op == "abs":
-            inp_data = inp.to_host() if inp.on_gpu else inp.data
             dL = g * np.sign(inp_data)
         elif op == "relu":
-            inp_data = inp.to_host() if inp.on_gpu else inp.data
             dL = g * (inp_data > 0).astype(np.float32)
         elif op == "sigmoid":
-            inp_data = inp.to_host() if inp.on_gpu else inp.data
             s = 1.0 / (1.0 + np.exp(-inp_data))
             dL = g * s * (1.0 - s)
         elif op == "tanh":
-            inp_data = inp.to_host() if inp.on_gpu else inp.data
             t = np.tanh(inp_data)
             dL = g * (1.0 - t ** 2)
+        elif op == "sum":
+            dL = np.full(inp_data.shape, float(g.flat[0]), dtype=np.float32)
+        elif op == "mean":
+            dL = np.full(inp_data.shape, float(g.flat[0]) / float(inp_data.size), dtype=np.float32)
         elif op == "max":
-            inp_data = inp.to_host() if inp.on_gpu else inp.data
             mask = (inp_data == np.max(inp_data)).astype(np.float32)
             mask /= np.sum(mask)
             dL = float(g.flat[0]) * mask
         elif op == "min":
-            inp_data = inp.to_host() if inp.on_gpu else inp.data
             mask = (inp_data == np.min(inp_data)).astype(np.float32)
             mask /= np.sum(mask)
             dL = float(g.flat[0]) * mask
         else:
-            dL = np.zeros(inp_shape, dtype=np.float32)
+            dL = np.zeros_like(inp_data)
         acc = inp.grad.data + dL if inp.grad is not None else dL.copy()
         inp.grad = Tensor(acc.astype(np.float32))
 
@@ -110,40 +101,33 @@ def attach_binary_grad(out, left, right, op: str):
     if getattr(right, "requires_grad", False):
         out._prev.add(right)
 
-    left_shape = left.shape
-    right_shape = right.shape
+    left_arr = left.to_host() if left.on_gpu else left.data
+    right_arr = right.to_host() if right.on_gpu else right.data
 
-    def _bwd(left=left, right=right, left_shape=left_shape, right_shape=right_shape, out=out, op=op):
+    def _bwd(left=left, right=right, left_arr=left_arr, right_arr=right_arr, out=out, op=op):
         g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
         if op == "add":
             dL, dR = g, g
         elif op == "sub":
             dL, dR = g, -g
         elif op == "mul":
-            left_arr = left.to_host() if left.on_gpu else left.data
-            right_arr = right.to_host() if right.on_gpu else right.data
             dL = g * right_arr
             dR = g * left_arr
         elif op == "div":
-            left_arr = left.to_host() if left.on_gpu else left.data
-            right_arr = right.to_host() if right.on_gpu else right.data
             dL = g / right_arr
             dR = -g * left_arr / (right_arr ** 2)
         elif op == "pow":
-            left_arr = left.to_host() if left.on_gpu else left.data
-            right_arr = right.to_host() if right.on_gpu else right.data
             dL = g * right_arr * np.power(np.abs(left_arr) + 1e-12, right_arr - 1)
             dR = g * np.power(np.abs(left_arr) + 1e-12, right_arr) * np.log(np.abs(left_arr) + 1e-12)
         else:
-            dL = np.zeros(left_shape, dtype=np.float32)
-            dR = np.zeros(right_shape, dtype=np.float32)
+            dL = dR = np.zeros_like(left_arr)
 
         if getattr(left, "requires_grad", False):
-            dL = _unbroadcast(np.array(dL, dtype=np.float32), left_shape)
+            dL = _unbroadcast(np.array(dL, dtype=np.float32), left_arr.shape)
             acc = left.grad.data + dL if left.grad is not None else dL.copy()
             left.grad = Tensor(acc.astype(np.float32))
         if getattr(right, "requires_grad", False):
-            dR = _unbroadcast(np.array(dR, dtype=np.float32), right_shape)
+            dR = _unbroadcast(np.array(dR, dtype=np.float32), right_arr.shape)
             acc = right.grad.data + dR if right.grad is not None else dR.copy()
             right.grad = Tensor(acc.astype(np.float32))
 
@@ -165,15 +149,16 @@ def attach_matmul_grad(out, left, right):
     if getattr(right, "requires_grad", False):
         out._prev.add(right)
 
-    def _bwd(left=left, right=right, out=out):
+    left_arr = left.to_host() if left.on_gpu else left.data
+    right_arr = right.to_host() if right.on_gpu else right.data
+
+    def _bwd(left=left, right=right, left_arr=left_arr, right_arr=right_arr, out=out):
         g = out.grad.data if out.grad is not None else np.ones(out.shape, dtype=np.float32)
         if getattr(left, "requires_grad", False):
-            right_arr = right.to_host() if right.on_gpu else right.data
             dL = g @ right_arr.T
             acc = left.grad.data + dL if left.grad is not None else dL.copy()
             left.grad = Tensor(acc.astype(np.float32))
         if getattr(right, "requires_grad", False):
-            left_arr = left.to_host() if left.on_gpu else left.data
             dR = left_arr.T @ g
             acc = right.grad.data + dR if right.grad is not None else dR.copy()
             right.grad = Tensor(acc.astype(np.float32))
