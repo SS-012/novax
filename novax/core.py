@@ -47,7 +47,7 @@ _UNARY_CUDA_EXPR = {
     "sqrt":    "sqrtf(a[idx])",
     "abs":     "fabsf(a[idx])",
     "neg":     "(-a[idx])",
-    "relu":    "fmaxf(0.0f, a[idx])",
+    "relu":    "(a[idx] > 0.0f ? a[idx] : 0.0f)",
     "sigmoid": "(1.0f / (1.0f + expf(-a[idx])))",
     "tanh":    "tanhf(a[idx])",
 }
@@ -462,7 +462,7 @@ class Tensor:
             "sqrt":    "sqrtf({e})",
             "abs":     "fabsf({e})",
             "neg":     "(-({e}))",
-            "relu":    "fmaxf(0.0f, {e})",
+            "relu":    "(({e}) > 0.0f ? ({e}) : 0.0f)",
             "sigmoid": "(1.0f / (1.0f + expf(-({e}))))",
             "tanh":    "tanhf({e})",
         }
