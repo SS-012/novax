@@ -9,8 +9,10 @@ class CUDAGraph:
         self._graph = ctypes.c_void_p()
         self._exec = ctypes.c_void_p()
         self._stream = None
+        self._stream_handle = None
         self._buffers = []
         self._cudart = _load_cudart()
+        self._graph_launch = self._cudart.cudaGraphLaunch
 
     def capture(self, fn):
         if self._exec.value:
@@ -23,6 +25,7 @@ class CUDAGraph:
         self._stream = launcher._get_stream()
         if self._stream is None:
             raise RuntimeError("CUDA stream is not available for graph capture")
+        self._stream_handle = ctypes.c_void_p(int(self._stream.handle))
 
         # Warm once so kernels and cuBLAS handles are compiled/initialized before capture.
         fn()
@@ -53,15 +56,14 @@ class CUDAGraph:
             index += 1
             return ptr
 
-        stream_handle = ctypes.c_void_p(int(self._stream.handle))
         mempool.alloc = graph_alloc
         try:
-            _check(self._cudart.cudaStreamBeginCapture(stream_handle, ctypes.c_int(0)), "cudaStreamBeginCapture")
+            _check(self._cudart.cudaStreamBeginCapture(self._stream_handle, ctypes.c_int(0)), "cudaStreamBeginCapture")
             fn()
-            _check(self._cudart.cudaStreamEndCapture(stream_handle, ctypes.byref(self._graph)), "cudaStreamEndCapture")
+            _check(self._cudart.cudaStreamEndCapture(self._stream_handle, ctypes.byref(self._graph)), "cudaStreamEndCapture")
         except Exception:
             try:
-                self._cudart.cudaStreamEndCapture(stream_handle, ctypes.byref(self._graph))
+                self._cudart.cudaStreamEndCapture(self._stream_handle, ctypes.byref(self._graph))
             except Exception:
                 pass
             raise
@@ -76,8 +78,7 @@ class CUDAGraph:
     def replay(self):
         if not self._exec.value:
             raise RuntimeError("CUDAGraph.capture() must be called before replay()")
-        stream_handle = ctypes.c_void_p(int(self._stream.handle))
-        _check(self._cudart.cudaGraphLaunch(self._exec, stream_handle), "cudaGraphLaunch")
+        _check(self._graph_launch(self._exec, self._stream_handle), "cudaGraphLaunch")
 
     def __del__(self):
         try:
