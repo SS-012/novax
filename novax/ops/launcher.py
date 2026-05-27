@@ -216,7 +216,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     return Tensor(out_gpu, gpu=True, inputs=inputs)
 
 
-def launch_reduce(a, op_name: str, reduce_type: str):
+def launch_reduce(a, op_name: str, reduce_type: str, scale: float = 1.0):
     """
     Two-pass parallel reduction kernel using shared memory.
 
@@ -246,7 +246,7 @@ def launch_reduce(a, op_name: str, reduce_type: str):
 
     BS = 256
     kernel_src = f"""
-    __global__ void {op_name}(const float* in, float* out, int n) {{
+    __global__ void {op_name}(const float* in, float* out, int n, float scale) {{
         extern __shared__ float smem[];
         int tid = threadIdx.x;
         int idx = blockIdx.x * blockDim.x + tid;
@@ -258,7 +258,7 @@ def launch_reduce(a, op_name: str, reduce_type: str):
             }}
             __syncthreads();
         }}
-        if (tid == 0) out[blockIdx.x] = smem[0];
+        if (tid == 0) out[blockIdx.x] = smem[0] * scale;
     }}
     """
 
@@ -267,7 +267,8 @@ def launch_reduce(a, op_name: str, reduce_type: str):
     partial_gpu = mempool.alloc(grid_size * 4)
     func = get_kernel(op_name, kernel_src)
     stream = _get_stream()
-    func(a.gpu_ptr, partial_gpu, np.int32(n),
+    first_scale = np.float32(scale if grid_size == 1 else 1.0)
+    func(a.gpu_ptr, partial_gpu, np.int32(n), first_scale,
          block=(BS, 1, 1), grid=(grid_size, 1, 1),
          shared=BS * 4, stream=stream)
 
@@ -281,7 +282,8 @@ def launch_reduce(a, op_name: str, reduce_type: str):
         func2 = get_kernel(func2_name, func2_src)
         grid2 = (grid_size + BS - 1) // BS
         partial2_gpu = mempool.alloc(grid2 * 4)
-        func2(partial_gpu, partial2_gpu, np.int32(grid_size),
+        second_scale = np.float32(scale if grid2 == 1 else 1.0)
+        func2(partial_gpu, partial2_gpu, np.int32(grid_size), second_scale,
               block=(BS, 1, 1), grid=(grid2, 1, 1),
               shared=BS * 4, stream=stream)
         if grid2 == 1:
@@ -292,7 +294,7 @@ def launch_reduce(a, op_name: str, reduce_type: str):
             func3_src = kernel_src.replace(op_name, func3_name)
             func3 = get_kernel(func3_name, func3_src)
             final_gpu = mempool.alloc(4)
-            func3(partial2_gpu, final_gpu, np.int32(grid2),
+            func3(partial2_gpu, final_gpu, np.int32(grid2), np.float32(scale),
                   block=(BS, 1, 1), grid=(1, 1, 1),
                   shared=BS * 4, stream=stream)
 

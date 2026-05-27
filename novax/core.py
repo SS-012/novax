@@ -309,9 +309,12 @@ class Tensor:
                 if op == "sum":
                     out = launch_reduce(inp, "sum_reduce", "sum")
                 elif op == "mean":
-                    s = launch_reduce(inp, "mean_sum_reduce", "sum")
-                    out = launch_kernel(s, None, "mean_div_kernel",
-                                        f"a[idx] / {float(inp.size)}f")
+                    out = launch_reduce(
+                        inp,
+                        "mean_sum_reduce",
+                        "sum",
+                        scale=1.0 / float(inp.size),
+                    )
                 elif op == "max":
                     out = launch_reduce(inp, "max_reduce", "max")
                 elif op == "min":
