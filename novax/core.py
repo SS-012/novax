@@ -426,8 +426,6 @@ class Tensor:
 
         _build_topo(self)
         self.grad = Tensor(np.ones(self.shape, dtype=np.float32))
-        if self.on_gpu:
-            self.grad.to_gpu()
         for node in reversed(topo):
             node._backward()
 
