@@ -77,8 +77,6 @@ def _get_stream():
     global _stream
     if cuda is None:
         return None
-    if _stream is not None:
-        return _stream
     try:
         ctx = cuda.Context.get_current()
     except Exception:
