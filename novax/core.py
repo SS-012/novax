@@ -394,17 +394,21 @@ class Tensor:
     # ------------------------------------------------------------------
 
     def _attach_unary_grad(self, out, inp, op, track_grad):
-        if track_grad:
+        if track_grad and getattr(inp, "requires_grad", False):
             from novax.autograd import attach_unary_grad
             attach_unary_grad(out, inp, op)
 
     def _attach_matmul_grad(self, out, left, right, track_grad):
-        if track_grad:
+        if track_grad and (
+            getattr(left, "requires_grad", False) or getattr(right, "requires_grad", False)
+        ):
             from novax.autograd import attach_matmul_grad
             attach_matmul_grad(out, left, right)
 
     def _attach_binary_grad(self, out, left, right, op, track_grad):
-        if track_grad:
+        if track_grad and (
+            getattr(left, "requires_grad", False) or getattr(right, "requires_grad", False)
+        ):
             from novax.autograd import attach_binary_grad
             attach_binary_grad(out, left, right, op)
 

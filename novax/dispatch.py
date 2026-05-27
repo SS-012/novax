@@ -61,17 +61,19 @@ def _lazy_gpu_no_grad(t) -> bool:
 
 def _exec_unary(op_name, gpu_fn, cpu_fn, a):
     """Execute a unary op on a concrete tensor and set up autograd if needed."""
-    from novax.autograd import attach_unary_grad
     out = gpu_fn(a) if (_use_gpu(a) and gpu_fn) else cpu_fn(a)
-    attach_unary_grad(out, a, op_name)
+    if getattr(a, "requires_grad", False):
+        from novax.autograd import attach_unary_grad
+        attach_unary_grad(out, a, op_name)
     return out
 
 
 def _exec_binary(op_name, gpu_fn, cpu_fn, a, b):
     """Execute a binary op on concrete tensors and set up autograd if needed."""
-    from novax.autograd import attach_binary_grad
     out = gpu_fn(a, b) if (_use_gpu(a, b) and gpu_fn) else cpu_fn(a, b)
-    attach_binary_grad(out, a, b, op_name)
+    if getattr(a, "requires_grad", False) or getattr(b, "requires_grad", False):
+        from novax.autograd import attach_binary_grad
+        attach_binary_grad(out, a, b, op_name)
     return out
 
 
@@ -111,11 +113,12 @@ def pow(a, b):
 
 def matmul(a, b):
     from novax.core import Tensor
-    from novax.autograd import attach_matmul_grad
     if _is_lazy(a) or _is_lazy(b):
         return Tensor(None, op="matmul", inputs=[a, b])
     out = gpu_matmul(a, b) if (_use_gpu(a, b) and gpu_matmul) else cpu_matmul(a, b)
-    attach_matmul_grad(out, a, b)
+    if getattr(a, "requires_grad", False) or getattr(b, "requires_grad", False):
+        from novax.autograd import attach_matmul_grad
+        attach_matmul_grad(out, a, b)
     return out
 
 # ---------------------------------------------------------------------------
