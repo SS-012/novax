@@ -20,8 +20,6 @@ _kernel_cache = {}
 _stream = None
 _cublas_lib = None
 _cublas_handle = None
-_reduce_block_size_cache = None
-_sm_count_cache = None
 
 _CUBLAS_OP_N = 0
 
@@ -192,9 +190,6 @@ def _optimal_block_size() -> int:
 
 
 def _optimal_reduce_block_size() -> int:
-    global _reduce_block_size_cache
-    if _reduce_block_size_cache is not None:
-        return _reduce_block_size_cache
     if cuda is None:
         return 256
     try:
@@ -203,26 +198,19 @@ def _optimal_reduce_block_size() -> int:
         )
         for size in [1024, 512, 256]:
             if size <= max_threads:
-                _reduce_block_size_cache = size
                 return size
     except Exception:
         pass
-    _reduce_block_size_cache = 256
     return 256
 
 
 def _multiprocessor_count() -> int:
-    global _sm_count_cache
-    if _sm_count_cache is not None:
-        return _sm_count_cache
     if cuda is None:
         return 1
     try:
-        _sm_count_cache = int(cuda.Device(0).get_attribute(cuda.device_attribute.MULTIPROCESSOR_COUNT))
-        return _sm_count_cache
+        return int(cuda.Device(0).get_attribute(cuda.device_attribute.MULTIPROCESSOR_COUNT))
     except Exception:
-        _sm_count_cache = 16
-        return _sm_count_cache
+        return 16
 
 
 def get_kernel(name: str, src: str):
