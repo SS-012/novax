@@ -5,7 +5,7 @@ try:
 except Exception:
     cuda = None
     SourceModule = None
-from typing import TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from novax.core import Tensor
 from novax.utils import mempool
@@ -14,6 +14,54 @@ from novax.utils import mempool
 _kernel_cache = {}
 # Lazily create streams only after a CUDA context exists; default to None
 _stream = None
+
+
+def _broadcast_index_expr(t, output_shape, output_size, idx_expr="idx"):
+    if t.size == output_size:
+        return idx_expr
+    if t.size == 1:
+        return "0"
+
+    in_shape = tuple(t.shape)
+    out_shape = tuple(output_shape)
+    if not in_shape or len(in_shape) > len(out_shape):
+        return None
+
+    padded = (1,) * (len(out_shape) - len(in_shape)) + in_shape
+    in_strides = []
+    stride = 1
+    for dim in reversed(in_shape):
+        in_strides.insert(0, stride)
+        stride *= dim
+    padded_strides = [0] * (len(out_shape) - len(in_shape)) + in_strides
+
+    terms = []
+    out_stride = output_size
+    for out_dim, in_dim, in_stride in zip(out_shape, padded, padded_strides):
+        if out_dim <= 0:
+            return None
+        out_stride //= out_dim
+        if in_dim == out_dim:
+            terms.append(f"(({idx_expr} / {out_stride}) % {out_dim}) * {in_stride}")
+        elif in_dim == 1:
+            continue
+        else:
+            return None
+
+    return " + ".join(terms) if terms else "0"
+
+
+def _apply_broadcast_indices(expr: str, inputs, output_shape, output_size: int) -> Optional[str]:
+    for i, t in enumerate(inputs):
+        in_idx = _broadcast_index_expr(t, output_shape, output_size)
+        if in_idx is None:
+            return None
+        expr = expr.replace(f"x{i}[idx]", f"x{i}[{in_idx}]")
+        if i == 0:
+            expr = expr.replace("a[idx]", f"a[{in_idx}]")
+        elif i == 1:
+            expr = expr.replace("b[idx]", f"b[{in_idx}]")
+    return expr
 
 
 def _get_stream():
@@ -63,7 +111,7 @@ def get_kernel(name: str, src: str):
     return func
 
 
-def launch_kernel(a, b=None, op_name: str = "custom_kernel", expr: str = None, scalar: float | None = None):
+def launch_kernel(a, b=None, op_name: str = "custom_kernel", expr: str = None, scalar: Optional[float] = None):
     """
     Generic GPU kernel launcher for elementwise operations.
 
@@ -82,7 +130,8 @@ def launch_kernel(a, b=None, op_name: str = "custom_kernel", expr: str = None, s
 
     if b is not None:
         assert b.on_gpu, "Input tensor 'b' must be on GPU."
-        assert a.size == b.size, "Tensor size mismatch"
+        expr = _apply_broadcast_indices(expr, [a, b], a.shape, n)
+        assert expr is not None, f"Shapes are not broadcastable: {a.shape} and {b.shape}"
 
     if b is None and scalar is None:
         kernel_src = f"""
@@ -141,8 +190,8 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
         raise RuntimeError("GPU not available: cannot launch kernels")
     assert all(t.on_gpu for t in inputs), "All inputs must be on GPU"
     n = inputs[0].size
-    for t in inputs:
-        assert t.size == n, "All inputs must have same size"
+    expr = _apply_broadcast_indices(expr, inputs, inputs[0].shape, n)
+    assert expr is not None, "All inputs must be broadcastable to the output shape"
 
     params = ", ".join([f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"])
     kernel_src = f"""

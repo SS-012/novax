@@ -1,12 +1,27 @@
+import atexit
+
 import numpy as np
 from novax.utils import mempool
 from novax.ops.launcher import launch_kernel, launch_fused
+
+_CUDA_CONTEXT = None
 
 try:
     import pycuda.driver as cuda
     cuda.init()
     if not cuda.Context.get_current():
-        ctx = cuda.Device(0).make_context()
+        _CUDA_CONTEXT = cuda.Device(0).make_context()
+
+        def _cleanup_cuda_context():
+            global _CUDA_CONTEXT
+            if _CUDA_CONTEXT is not None:
+                try:
+                    cuda.Context.pop()
+                except Exception:
+                    pass
+                _CUDA_CONTEXT = None
+
+        atexit.register(_cleanup_cuda_context)
     GPU_AVAILABLE = True
 except ImportError:
     cuda = None

@@ -323,3 +323,32 @@ class TestGPUNewOps:
         nx.set_default_device("gpu")
         result = nx.sum(a)
         assert abs(float(result.to_host()[0]) - 10.0) < 1e-4
+
+    def test_gpu_softmax(self):
+        arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        a = Tensor(arr).to_gpu()
+        nx.set_default_device("gpu")
+        result = nx.softmax(a).to_host()
+        expected = np.exp(arr - np.max(arr))
+        expected = expected / np.sum(expected)
+        np.testing.assert_array_almost_equal(result, expected, decimal=5)
+
+    def test_gpu_lazy_bias_broadcast(self):
+        a_arr = np.arange(6, dtype=np.float32).reshape(2, 3)
+        b_arr = np.array([10.0, 20.0, 30.0], dtype=np.float32)
+        a = Tensor(a_arr).to_gpu()
+        b = Tensor(b_arr).to_gpu()
+        nx.set_default_device("gpu")
+        result = (a + b).eval()
+        np.testing.assert_array_almost_equal(result.to_host(), a_arr + b_arr)
+
+    def test_gpu_mlp_forward_bias_broadcast(self):
+        x_arr = np.arange(8, dtype=np.float32).reshape(2, 4) / 8.0
+        w_arr = np.arange(12, dtype=np.float32).reshape(4, 3) / 12.0
+        b_arr = np.array([0.25, -0.5, 0.75], dtype=np.float32)
+        x = Tensor(x_arr).to_gpu()
+        w = Tensor(w_arr).to_gpu()
+        b = Tensor(b_arr).to_gpu()
+        nx.set_default_device("gpu")
+        result = nx.relu(nx.matmul(x, w) + b).eval()
+        np.testing.assert_array_almost_equal(result.to_host(), np.maximum(x_arr @ w_arr + b_arr, 0.0), decimal=5)
