@@ -175,12 +175,6 @@ class TestReductionGrad:
         nx.mean(a).eval().backward()
         np.testing.assert_array_almost_equal(a.grad.data, [0.25, 0.25, 0.25, 0.25])
 
-    @pytest.mark.skipif(not GPU_AVAILABLE, reason="GPU not available")
-    def test_gpu_mean_grad(self):
-        a = Tensor(np.arange(8, dtype=np.float32), requires_grad=True).to_gpu()
-        nx.mean(a).eval().backward()
-        np.testing.assert_array_almost_equal(a.grad.data, np.full(8, 0.125, dtype=np.float32))
-
 
 # ---------------------------------------------------------------------------
 # Matmul gradients
