@@ -258,6 +258,10 @@ class Tensor:
             return self._eval_unary(inp, track_grad)
 
         if self.op in _REDUCE_OPS:
+            fused_mean = self._try_eval_matmul_bias_mean(track_grad)
+            if fused_mean is not None:
+                return fused_mean
+
             inp = self.inputs[0].eval()
             return self._eval_unary(inp, track_grad)
 
@@ -290,6 +294,43 @@ class Tensor:
 
         try:
             return launch_fused(leaves, fused_expr, "fused_kernel")
+        except Exception:
+            return None
+
+    def _try_eval_matmul_bias_mean(self, track_grad: bool):
+        if (not GPU_AVAILABLE) or self.op != "mean":
+            return None
+
+        add_node = self.inputs[0]
+        if getattr(add_node, "op", None) != "add":
+            return None
+
+        left, right = add_node.inputs
+        if getattr(left, "op", None) == "matmul":
+            matmul_node, bias_node = left, right
+        elif getattr(right, "op", None) == "matmul":
+            matmul_node, bias_node = right, left
+        else:
+            return None
+
+        x_node, w_node = matmul_node.inputs
+        if track_grad and any(
+            getattr(t, "requires_grad", False) for t in (x_node, w_node, bias_node)
+        ):
+            return None
+
+        try:
+            x = x_node.eval()
+            w = w_node.eval()
+            bias = bias_node.eval()
+            if not (x.on_gpu and w.on_gpu and bias.on_gpu):
+                return None
+            if len(x.shape) != 2 or len(w.shape) != 2:
+                return None
+            if x.shape[1] != w.shape[0] or bias.size != w.shape[1]:
+                return None
+            from novax.ops.launcher import launch_matmul_bias_mean
+            return launch_matmul_bias_mean(x, w, bias)
         except Exception:
             return None
 
