@@ -10,13 +10,18 @@ try:
     import pycuda.driver as cuda
     cuda.init()
     if not cuda.Context.get_current():
-        _CUDA_CONTEXT = cuda.Device(0).make_context()
+        _CUDA_CONTEXT = cuda.Device(0).retain_primary_context()
+        _CUDA_CONTEXT.push()
 
         def _cleanup_cuda_context():
             global _CUDA_CONTEXT
             if _CUDA_CONTEXT is not None:
                 try:
                     cuda.Context.pop()
+                except Exception:
+                    pass
+                try:
+                    _CUDA_CONTEXT.detach()
                 except Exception:
                     pass
                 _CUDA_CONTEXT = None
