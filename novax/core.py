@@ -246,19 +246,50 @@ class Tensor:
         if self.is_leaf:
             return self
 
-        if self.op in _UNARY_ELEMENTWISE or self.op in _REDUCE_OPS:
+        track_grad = _get_grad_enabled()
+        if self.op in _UNARY_ELEMENTWISE:
+            fused = self._try_eval_fused_elementwise(track_grad)
+            if fused is not None:
+                return fused
+
             inp = self.inputs[0].eval()
-            return self._eval_unary(inp, _get_grad_enabled())
+            return self._eval_unary(inp, track_grad)
+
+        if self.op in _REDUCE_OPS:
+            inp = self.inputs[0].eval()
+            return self._eval_unary(inp, track_grad)
 
         if self.op == "matmul":
             left = self.inputs[0].eval()
             right = self.inputs[1].eval()
-            return self._eval_matmul(left, right, _get_grad_enabled())
+            return self._eval_matmul(left, right, track_grad)
 
         # Binary elementwise: add, sub, mul, div, pow
+        fused = self._try_eval_fused_elementwise(track_grad)
+        if fused is not None:
+            return fused
+
         left = self.inputs[0].eval()
         right = self.inputs[1].eval()
-        return self._eval_binary(left, right, _get_grad_enabled())
+        return self._eval_binary(left, right, track_grad)
+
+    def _try_eval_fused_elementwise(self, track_grad: bool):
+        if (not GPU_AVAILABLE) or self.op not in (_UNARY_ELEMENTWISE | _BINARY_OPS):
+            return None
+
+        folded = self._fold_constants()
+        fused_expr, leaves = folded._build_fused()
+        if fused_expr is None or not leaves:
+            return None
+        if not all(getattr(t, "on_gpu", False) for t in leaves):
+            return None
+        if track_grad and any(getattr(t, "requires_grad", False) for t in leaves):
+            return None
+
+        try:
+            return launch_fused(leaves, fused_expr, "fused_kernel")
+        except Exception:
+            return None
 
     def _eval_unary(self, inp, track_grad: bool):
         op = self.op

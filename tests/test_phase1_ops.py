@@ -352,3 +352,15 @@ class TestGPUNewOps:
         nx.set_default_device("gpu")
         result = nx.relu(nx.matmul(x, w) + b).eval()
         np.testing.assert_array_almost_equal(result.to_host(), np.maximum(x_arr @ w_arr + b_arr, 0.0), decimal=5)
+
+    def test_gpu_lazy_nested_elementwise_chain(self):
+        a_arr = np.linspace(-2.0, 2.0, 64, dtype=np.float32)
+        b_arr = a_arr * 0.5
+        c_arr = a_arr + 1.0
+        a = Tensor(a_arr).to_gpu()
+        b = Tensor(b_arr).to_gpu()
+        c = Tensor(c_arr).to_gpu()
+        nx.set_default_device("gpu")
+        result = nx.sigmoid(nx.relu(a * b + c) * a).eval()
+        expected = 1.0 / (1.0 + np.exp(-(np.maximum(a_arr * b_arr + c_arr, 0.0) * a_arr)))
+        np.testing.assert_array_almost_equal(result.to_host(), expected, decimal=5)
