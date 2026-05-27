@@ -492,9 +492,18 @@ def _launch_sum_atomic_float4(a, op_name: str, scale: float):
     n4 = a.size // 4
     grid_size = min((n4 + BS - 1) // BS, max(1, _multiprocessor_count() * 8))
     kernel_src = f"""
+    __inline__ __device__ float warp_sum(float v) {{
+        for (int offset = 16; offset > 0; offset >>= 1) {{
+            v += __shfl_down_sync(0xffffffff, v, offset);
+        }}
+        return v;
+    }}
+
     __global__ void {op_name}(const float* in, float* out, int n4, float scale) {{
-        extern __shared__ float smem[];
+        __shared__ float warp_sums[32];
         int tid = threadIdx.x;
+        int lane = tid & 31;
+        int warp = tid >> 5;
         int stride = blockDim.x * gridDim.x;
         const float4* in4 = reinterpret_cast<const float4*>(in);
         float acc = 0.0f;
@@ -503,16 +512,19 @@ def _launch_sum_atomic_float4(a, op_name: str, scale: float):
             acc += v.x + v.y + v.z + v.w;
         }}
 
-        smem[tid] = acc;
-        __syncthreads();
-        for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {{
-            if (tid < offset) {{
-                smem[tid] += smem[tid + offset];
-            }}
-            __syncthreads();
+        acc = warp_sum(acc);
+        if (lane == 0) {{
+            warp_sums[warp] = acc;
         }}
-        if (tid == 0) {{
-            atomicAdd(out, smem[0] * scale);
+        __syncthreads();
+
+        if (warp == 0) {{
+            int warps_per_block = (blockDim.x + 31) >> 5;
+            acc = (lane < warps_per_block) ? warp_sums[lane] : 0.0f;
+            acc = warp_sum(acc);
+            if (lane == 0) {{
+                atomicAdd(out, acc * scale);
+            }}
         }}
     }}
     """
@@ -527,7 +539,7 @@ def _launch_sum_atomic_float4(a, op_name: str, scale: float):
             cuda.memset_d32(out_gpu, 0, 1)
         func(a.gpu_ptr, out_gpu, np.int32(n4), np.float32(scale),
              block=(BS, 1, 1), grid=(grid_size, 1, 1),
-             shared=BS * 4, stream=stream)
+             stream=stream)
     except Exception:
         return None
 
