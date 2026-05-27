@@ -529,7 +529,7 @@ def launch_matmul(a, b):
 
 
 def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
-    if min(M, K, N) < 128:
+    if M != K or K != N or M < 128:
         return None
     lib, handle = _get_cublas()
     if lib is None or handle is None:
