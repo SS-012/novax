@@ -636,12 +636,13 @@ def launch_matmul(a, b):
     K2, N = b.shape
     assert K == K2, f"Shape mismatch for matmul: {a.shape} @ {b.shape}"
 
-    if M == 64 and K == 64 and N == 64:
-        return _launch_matmul_exact64(a, b)
-
     cublas_out = _launch_matmul_cublas(a, b, M, K, N)
     if cublas_out is not None:
         return cublas_out
+
+    exact64_out = _launch_matmul_exact64(a, b, M, K, N)
+    if exact64_out is not None:
+        return exact64_out
 
     TILE = 16
     kernel_src = f"""
@@ -686,7 +687,10 @@ def launch_matmul(a, b):
     return result
 
 
-def _launch_matmul_exact64(a, b):
+def _launch_matmul_exact64(a, b, M: int, K: int, N: int):
+    if M != 64 or K != 64 or N != 64:
+        return None
+
     kernel_src = """
     __global__ void matmul_exact64_kernel(const float* A, const float* B, float* C) {
         __shared__ float As[16][16];
