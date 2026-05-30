@@ -238,14 +238,14 @@ def _multiprocessor_count() -> int:
         return 16
 
 
-def get_kernel(name: str, src: str, *, no_extern_c: bool = False):
+def get_kernel(name: str, src: str):
     """Compile (if needed) and return a cached CUDA kernel by name."""
-    key = (name, src, no_extern_c)
+    key = (name, src)
     if key in _kernel_cache:
         return _kernel_cache[key]
     if SourceModule is None:
         raise RuntimeError("GPU not available: cannot compile CUDA kernels")
-    mod = SourceModule(src, no_extern_c=no_extern_c)
+    mod = SourceModule(src)
     func = mod.get_function(name)
     _kernel_cache[key] = func
     return func
@@ -771,62 +771,6 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
     return result
 
 
-def _launch_matmul_bias_relu_wmma_256(x, w, bias, M: int, K: int, N: int):
-    if (M, K, N) != (256, 512, 256):
-        return None
-    if not getattr(bias, "_is_all_zero", False):
-        return None
-
-    kernel_src = r"""
-    #include <mma.h>
-    using namespace nvcuda;
-
-    extern "C" __global__ void fused_mm_relu_wmma_256_512_256(
-        const float* X, const float* W, float* C
-    ) {
-        const int row = blockIdx.y * 16;
-        const int col = blockIdx.x * 16;
-
-        wmma::fragment<wmma::accumulator, 16, 16, 8, float> acc;
-        wmma::fill_fragment(acc, 0.0f);
-
-        #pragma unroll
-        for (int kk = 0; kk < 512; kk += 8) {
-            wmma::fragment<wmma::matrix_a, 16, 16, 8, wmma::precision::tf32, wmma::row_major> a_frag;
-            wmma::fragment<wmma::matrix_b, 16, 16, 8, wmma::precision::tf32, wmma::row_major> b_frag;
-            wmma::load_matrix_sync(a_frag, X + row * 512 + kk, 512);
-            wmma::load_matrix_sync(b_frag, W + kk * 256 + col, 256);
-            wmma::mma_sync(acc, a_frag, b_frag, acc);
-        }
-
-        #pragma unroll
-        for (int i = 0; i < acc.num_elements; i++) {
-            acc.x[i] = fmaxf(acc.x[i], 0.0f);
-        }
-        wmma::store_matrix_sync(C + row * 256 + col, acc, 256, wmma::mem_row_major);
-    }
-    """
-    try:
-        func = get_kernel("fused_mm_relu_wmma_256_512_256", kernel_src, no_extern_c=True)
-        out_gpu = mempool.alloc(M * N * 4)
-        stream = _get_stream()
-        func(x.gpu_ptr, w.gpu_ptr, out_gpu,
-             block=(32, 1, 1), grid=(16, 16, 1), stream=stream)
-    except Exception:
-        try:
-            mempool.free(out_gpu, M * N * 4)
-        except Exception:
-            pass
-        return None
-
-    Tensor = _get_tensor_cls()
-    result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
-    result.shape = (M, N)
-    result.size = M * N
-    result.dtype = np.float32
-    return result
-
-
 def _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M: int, K: int, N: int):
     if (M, K, N) != (256, 512, 256):
         return None
@@ -905,10 +849,6 @@ def launch_matmul_bias_relu(x, w, bias):
     K2, N = w.shape
     assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
-
-    wmma_out = _launch_matmul_bias_relu_wmma_256(x, w, bias, M, K, N)
-    if wmma_out is not None:
-        return wmma_out
 
     cublas_out = _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M, K, N)
     if cublas_out is not None:
