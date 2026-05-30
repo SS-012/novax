@@ -177,6 +177,13 @@ Experiment note:
   descriptor path is still too noisy; future epilogue work should use a
   persistent lower-level wrapper, a generated CUTLASS-style kernel, or an
   explicit plan cache outside the benchmark hot loop.
+- `7c5ff68` tested a hand-written exact TF32 WMMA fused matmul+ReLU kernel for
+  the `256x512x256` zero-bias shape. It proved PyCUDA can compile C++ WMMA
+  sources when `SourceModule(..., no_extern_c=True)` is used, and correctness
+  passed. Performance did not qualify: the target improved slightly, but the
+  focused score stayed negative. A one-warp-per-16x16 WMMA tile is not enough;
+  a real generated path needs multi-warp tiles, shared-memory staging,
+  epilogue scheduling, and autotuned variants.
 
 ### H4: GPU-resident MLP backward, gated narrowly
 
@@ -316,6 +323,10 @@ Experiment note:
   The new lesson is not "avoid cuBLASLt"; it is "do not put cuBLASLt descriptor
   and heuristic plumbing in the Python hot path and expect stable focused-suite
   wins."
+- `7c5ff68` validated the first local WMMA compile path but also showed that
+  "uses Tensor Cores" is not the same as "is a competitive GEMM kernel." Future
+  generated fused-mm work should start from CUTLASS-style tiling or an autotune
+  search space, not a single static warp tile.
 
 ## Things Not To Repeat Blindly
 
@@ -354,3 +365,5 @@ Experiment note:
   autotune loop or profiler evidence.
 - Python/ctypes cuBLASLt epilogue setup in the hot fused-mm path without a
   persistent lower-level plan cache or generated kernel.
+- One-warp-per-output-tile WMMA fused-mm kernels without shared-memory staging,
+  multi-warp blocking, or autotuned tile selection.
