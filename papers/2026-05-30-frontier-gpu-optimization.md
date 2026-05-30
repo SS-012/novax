@@ -210,6 +210,12 @@ Experiment note:
   multi-versioning lesson: even tiny GEMM variants need generated/selected
   strategies and repeated measurements, not a single plausible memory-hierarchy
   swap.
+- `2211a84` added an exact zero-bias `128x256x128` fused matmul+ReLU kernel
+  with no boundary checks, no bias load, and no runtime shape arguments. It
+  repeatedly improved both 128 fused-mm rows, but failed the focused gate twice
+  because unrelated focused rows regressed. This reinforces the CODA/CUDA Tile
+  lesson: NovaX's fused-mm edge probably needs a Tensor Core epilogue or
+  autotuned generated tile family, not another one-off SIMT 16x16 tile.
 
 ### H4: GPU-resident MLP backward, gated narrowly
 
@@ -415,3 +421,5 @@ Experiment note:
 - Exact repeated-inference rectangular cuBLAS routing in the current Python
   launcher form; it improved captured inference once but regressed seven
   focused rows, including square matmul.
+- Exact zero-bias `128x256x128` fused-mm through another static 16x16 SIMT
+  tile; it improved target rows but still failed focused confirmation.
