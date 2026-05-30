@@ -20,7 +20,6 @@ _kernel_cache = {}
 _stream = None
 _cublas_lib = None
 _cublas_handle = None
-_cublas_stream_handle = None
 _tensor_cls = None
 
 _CUBLAS_OP_N = 0
@@ -105,14 +104,13 @@ def _cublas_candidates():
 
 
 def _destroy_cublas():
-    global _cublas_handle, _cublas_stream_handle
+    global _cublas_handle
     if _cublas_lib is not None and _cublas_handle is not None:
         try:
             _cublas_lib.cublasDestroy_v2(_cublas_handle)
         except Exception:
             pass
         _cublas_handle = None
-        _cublas_stream_handle = None
 
 
 def _get_cublas():
@@ -167,16 +165,11 @@ def _get_cublas():
 
 
 def _set_cublas_stream(lib, handle):
-    global _cublas_stream_handle
     stream = _get_stream()
     if stream is None:
         return
-    stream_handle = int(stream.handle)
-    if _cublas_stream_handle == stream_handle:
-        return
     try:
-        lib.cublasSetStream_v2(handle, ctypes.c_void_p(stream_handle))
-        _cublas_stream_handle = stream_handle
+        lib.cublasSetStream_v2(handle, ctypes.c_void_p(int(stream.handle)))
     except Exception:
         pass
 
