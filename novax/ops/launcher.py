@@ -693,21 +693,12 @@ def _launch_matmul_exact64(a, b, M: int, K: int, N: int):
 
     kernel_src = """
     __global__ void matmul_exact64_kernel(const float* A, const float* B, float* C) {
-        __shared__ float As[16][16];
-        __shared__ float Bs[16][16];
         int row = blockIdx.y * 16 + threadIdx.y;
         int col = blockIdx.x * 16 + threadIdx.x;
         float acc = 0.0f;
-        #pragma unroll
-        for (int t = 0; t < 4; t++) {
-            As[threadIdx.y][threadIdx.x] = A[row * 64 + t * 16 + threadIdx.x];
-            Bs[threadIdx.y][threadIdx.x] = B[(t * 16 + threadIdx.y) * 64 + col];
-            __syncthreads();
-            #pragma unroll
-            for (int k = 0; k < 16; k++) {
-                acc += As[threadIdx.y][k] * Bs[k][threadIdx.x];
-            }
-            __syncthreads();
+        #pragma unroll 64
+        for (int k = 0; k < 64; k++) {
+            acc += A[row * 64 + k] * B[k * 64 + col];
         }
         C[row * 64 + col] = acc;
     }
