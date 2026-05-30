@@ -93,6 +93,14 @@ Expected mechanism:
 - reduce global-memory traffic and avoid separate epilogue launches while
   keeping matmul performance close to vendor kernels.
 
+Experiment note:
+
+- `86de151` tested a shape-gated cuBLAS GEMM followed by a separate bias+ReLU
+  epilogue kernel for large fused-mm shapes. It improved the 256 fused-mm cases
+  by about 1.19x to 1.23x, but failed the focused regression gate on rerun.
+  Next attempt should avoid the separate epilogue launch, likely through
+  cuBLASLt/CUTLASS-style fused epilogues or a better tile kernel.
+
 ### H4: GPU-resident MLP backward, gated narrowly
 
 Previous experiments made MLP backward beat PyTorch in one run, but broad
@@ -128,4 +136,3 @@ Expected mechanism:
 - Softmax fast-math changes that do not improve the softmax benchmark itself.
 - GPU backward rewrites that touch unrelated eager/autograd behavior.
 - CUDA graph replay micro-tweaks unless captured inference itself improves.
-

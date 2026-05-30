@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 62
+- Logged rows: 63
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 61
-- Unique non-baseline experiment commits: 60
+- Experiment evaluations after baseline: 62
+- Unique non-baseline experiment commits: 61
 - Currently successful unique experiments: 14
 - Strict benchmark-qualified performance successes: 1
-- Currently discarded or reverted unique experiments: 46
+- Currently discarded or reverted unique experiments: 47
 
 Definitions:
 
@@ -121,6 +121,14 @@ no-change run also failed against `best.json` with 21 reported regressions,
 reinforcing that small micro-optimizations are currently hard to classify with
 this single-run metric.
 
+After retargeting the benchmark to the differentiated-path metric, experiment
+`86de151` revisited large fused matmul through cuBLAS. It repeatedly improved
+the 256 fused-mm cases by about 1.19x to 1.23x and made the focused PyTorch
+comparison look better, but it still failed the new focused regression gate on
+rerun with 7 focused regressions. The finding is useful: vendor GEMM plus a
+separate epilogue can improve the larger fused-mm target, but it needs a better
+epilogue strategy or tighter benchmark noise handling before it should be kept.
+
 ## Successful Experiments Kept
 
 | Commit | Status | Qualified | Finding |
@@ -192,6 +200,7 @@ These experiments should not be retried in the same form.
 | `4325529` | discard | Skipping impossible matmul elementwise fusion sped eager inference but broke CUDA graph capture and failed the broad gate. |
 | `1afdd9a` | discard | Direct fused expression build improved fusion and `sqrt(abs)` directionally but missed the broad regression gate. |
 | `4b6e3a3` | discard | Specialized direct build for `sqrt(abs)` fusion did not improve the target case and failed the broad gate. |
+| `86de151` | discard | Large fused matmul through cuBLAS improved the 256 fused-mm cases but failed the focused regression budget on rerun. |
 
 ## Full Experiment Ledger
 
@@ -259,6 +268,7 @@ These experiments should not be retried in the same form.
 | `4325529` | discard | no | 10 | 11 | 1 | -1420.013683 | 1.096175 | Skipping impossible matmul elementwise fusion sped eager inference but broke capture and failed broad gate. |
 | `1afdd9a` | discard | no | 10 | 6 | 0 | -83.293341 | 1.030797 | Direct fused expression build improved fusion and sqrt_abs but missed broad regression gate. |
 | `4b6e3a3` | discard | no | 3 | 13 | 0 | -2088.905177 | 1.075438 | Specialized direct build for sqrt_abs fusion did not improve target case and failed broad gate. |
+| `86de151` | discard | no | 2 | 7 | 0 | -1088.266039 | 0.674881 | Focused large fused matmul through cuBLAS improved 256 fused-mm cases but failed focused regression budget on rerun. |
 
 ## Future Research Directions
 
