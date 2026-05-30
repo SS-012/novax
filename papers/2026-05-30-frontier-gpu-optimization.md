@@ -294,6 +294,11 @@ Experiment note:
   had zero focused improvements and failed the gate. This reinforces the
   launch-overhead lesson: once the epilogue is a separate tiny launch, trimming
   one branch inside the kernel is below the meaningful optimization surface.
+- `81fe1de` used 256-thread blocks only for ReLU-only fused expressions. The
+  run did not produce enough fusion-chain gain to overcome focused-suite noise
+  and regressed `matmul_64x64_x_64x64`. This reinforces the profiling lesson:
+  block-size tuning should be explicit autotuning with repeated measurements,
+  not another static rule.
 
 ## Things Not To Repeat Blindly
 
@@ -328,3 +333,5 @@ Experiment note:
   single-kernel fused-mm path is faster for that smaller shape.
 - Removing bounds checks from the separate exact fused-mm ReLU epilogue; it did
   not improve the focused suite.
+- Static 256-thread block selection for ReLU-only fused expressions without an
+  autotune loop or profiler evidence.
