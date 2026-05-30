@@ -227,6 +227,11 @@ Experiment note:
   saved baseline. This reinforces the FlipFlop/profiling lesson: shared-memory
   layout changes need counters or a measured search space; folklore bank
   conflict fixes can hurt the current tile.
+- `5166464` added `__launch_bounds__(256, 2)` to the exact 64x64 matmul
+  kernel. Correctness passed, but the benchmark produced no focused
+  improvements and six regressions, led by a large `fusion_chain3` regression.
+  This reinforces the KernelFoundry lesson: even narrow compiler hints need to
+  live inside a measured variant search, not as standalone edits.
 - `2211a84` added an exact zero-bias `128x256x128` fused matmul+ReLU kernel
   with no boundary checks, no bias load, and no runtime shape arguments. It
   repeatedly improved both 128 fused-mm rows, but failed the focused gate twice
@@ -443,6 +448,8 @@ Experiment note:
   shared-memory exact64 kernel; the confirmation run regressed the target row.
 - Padding the exact64 shared-memory tiles to 17 columns without profiler
   evidence; it regressed the target 64x64 matmul row.
+- Adding static launch-bounds hints to exact64 matmul without a measured
+  variant search; it produced no focused improvements.
 - Exact repeated-inference rectangular cuBLAS routing in the current Python
   launcher form; it improved captured inference once but regressed seven
   focused rows, including square matmul.
