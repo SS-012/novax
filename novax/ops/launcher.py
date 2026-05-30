@@ -23,6 +23,9 @@ _cublas_handle = None
 _tensor_cls = None
 
 _CUBLAS_OP_N = 0
+_CUBLAS_DEFAULT_MATH = 0
+_CUBLAS_TF32_TENSOR_OP_MATH = 3
+_cublas_math_mode = None
 
 
 def _broadcast_index_expr(t, output_shape, output_size, idx_expr="idx"):
@@ -134,6 +137,8 @@ def _get_cublas():
             lib.cublasDestroy_v2.restype = ctypes.c_int
             lib.cublasSetStream_v2.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
             lib.cublasSetStream_v2.restype = ctypes.c_int
+            lib.cublasSetMathMode.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            lib.cublasSetMathMode.restype = ctypes.c_int
             lib.cublasSgemm_v2.argtypes = [
                 ctypes.c_void_p,
                 ctypes.c_int,
@@ -170,6 +175,17 @@ def _set_cublas_stream(lib, handle):
         return
     try:
         lib.cublasSetStream_v2(handle, ctypes.c_void_p(int(stream.handle)))
+    except Exception:
+        pass
+
+
+def _set_cublas_math_mode(lib, handle, mode: int):
+    global _cublas_math_mode
+    if _cublas_math_mode == mode:
+        return
+    try:
+        if lib.cublasSetMathMode(handle, ctypes.c_int(mode)) == 0:
+            _cublas_math_mode = mode
     except Exception:
         pass
 
@@ -678,6 +694,8 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
     alpha = ctypes.c_float(1.0)
     beta = ctypes.c_float(0.0)
     _set_cublas_stream(lib, handle)
+    math_mode = _CUBLAS_TF32_TENSOR_OP_MATH if M >= 256 else _CUBLAS_DEFAULT_MATH
+    _set_cublas_math_mode(lib, handle, math_mode)
     try:
         status = lib.cublasSgemm_v2(
             handle,
