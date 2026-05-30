@@ -243,16 +243,6 @@ class TestBuildFused:
         assert expr is not None
         assert len(leaves) == 3
 
-    def test_multiply_add_uses_fmaf(self):
-        a = Tensor(np.array([1.0]))
-        b = Tensor(np.array([2.0]))
-        c = Tensor(np.array([3.0]))
-        mul = Tensor(None, op="mul", inputs=[a, b])
-        node = Tensor(None, op="add", inputs=[mul, c])
-        expr, leaves = node._build_fused()
-        assert expr.startswith("fmaf(")
-        assert len(leaves) == 3
-
 
 # ---------------------------------------------------------------------------
 # Memory pool

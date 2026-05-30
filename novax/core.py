@@ -470,22 +470,6 @@ class Tensor:
         def build(node: "Tensor"):
             if node.is_leaf:
                 return register_leaf(node)
-            if node.op == "add":
-                left, right = node.inputs
-                if (not left.is_leaf) and left.op == "mul":
-                    a_expr = build(left.inputs[0])
-                    b_expr = build(left.inputs[1])
-                    c_expr = build(right)
-                    if a_expr is None or b_expr is None or c_expr is None:
-                        return None
-                    return f"fmaf({a_expr}, {b_expr}, {c_expr})"
-                if (not right.is_leaf) and right.op == "mul":
-                    c_expr = build(left)
-                    a_expr = build(right.inputs[0])
-                    b_expr = build(right.inputs[1])
-                    if a_expr is None or b_expr is None or c_expr is None:
-                        return None
-                    return f"fmaf({a_expr}, {b_expr}, {c_expr})"
             if node.op in _binary_sym:
                 le = build(node.inputs[0])
                 re = build(node.inputs[1])
