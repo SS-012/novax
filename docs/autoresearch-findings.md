@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 76
+- Logged rows: 77
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 75
-- Unique non-baseline experiment commits: 74
+- Experiment evaluations after baseline: 76
+- Unique non-baseline experiment commits: 75
 - Currently successful unique experiments: 15
 - Strict benchmark-qualified performance successes: 2
-- Currently discarded or reverted unique experiments: 59
+- Currently discarded or reverted unique experiments: 60
 
 Definitions:
 
@@ -202,6 +202,12 @@ focused gate twice: primary score `-183.428112` with 2 focused improvements and
 regressions. The likely lesson is that Python-side expression-building savings
 are too small and noisy to keep unless the fusion chain wins survive the whole
 focused suite.
+Experiment `53d31b8` added a 16x16 exact-tile fused matmul+bias+ReLU kernel
+for dimensions divisible by 16, removing inner boundary checks and adding loop
+unrolling. Correctness passed, but the benchmark failed with score
+`-439.568890`, 1 focused improvement, and 3 focused regressions. The intended
+fused-mm mechanism did not show a durable target win, so no-bound exact tiling
+is not enough to beat the saved fused-mm baseline.
 
 ## Successful Experiments Kept
 
@@ -288,6 +294,7 @@ These experiments should not be retried in the same form.
 | `dfe4345` | discard | `__restrict__` fused-kernel pointer hints produced no focused improvements and regressed fused-mm cases. |
 | `29a37e2` | discard | Zero-bias fused matmul specialization produced no focused improvements and regressed focused cases. |
 | `4a31903` | discard | Direct fused-expression build improved `fusion_chain5` twice but failed the focused gate on both runs. |
+| `53d31b8` | discard | Exact-tile fused matmul removed boundary checks but failed to improve fused-mm enough and missed the focused gate. |
 
 ## Full Experiment Ledger
 
@@ -369,6 +376,7 @@ These experiments should not be retried in the same form.
 | `dfe4345` | discard | no | 0 | 2 | 0 | -555.194185 | 0.611843 | Restrict qualifiers on fused elementwise kernels produced no focused improvements and regressed fused-mm cases. |
 | `29a37e2` | discard | no | 0 | 5 | 0 | -1099.821460 | 0.647448 | Zero-bias fused matmul specialization produced no focused improvements and regressed fusion and fused-mm cases. |
 | `4a31903` | discard | no | 2 | 2 | 0 | -183.428112 | 0.612141 | Direct fused-expression build improved fusion_chain5 twice but failed the focused gate on both runs. |
+| `53d31b8` | discard | no | 1 | 3 | 0 | -439.568890 | 0.622602 | Exact-tile fused matmul removed boundary checks but failed to improve fused-mm enough and missed the focused gate. |
 
 ## Future Research Directions
 

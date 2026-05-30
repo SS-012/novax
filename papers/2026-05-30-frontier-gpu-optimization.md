@@ -33,6 +33,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [ParallelKittens: Systematic and Practical Simplification of Multi-GPU AI Kernels](https://arxiv.org/abs/2511.13940) | Multi-GPU performance depends heavily on overlapping communication, scheduling, and data-transfer primitives. | Not an immediate single-GPU benchmark target, but relevant if NovaX expands beyond one GPU. |
 | [CUDA-L2: Surpassing cuBLAS Performance for Matrix Multiplication through Reinforcement Learning](https://arxiv.org/abs/2512.02551) | The strongest matmul results come from automated search across a large kernel configuration space with measured execution speed as the reward. | NovaX should not expect static hand tweaks to beat cuBLAS/PyTorch broadly; serious matmul wins need a shape-keyed autotuning loop or vendor-library plan cache. |
 | [tritonBLAS: Triton-based Analytical Approach for GEMM Kernel Parameter Selection](https://arxiv.org/abs/2512.04226) | Analytical models can predict near-optimal GEMM tiling from hardware/cache/shape parameters without paying full empirical autotuning cost. | For NovaX fused-mm, use shape-keyed analytical defaults before brute-force search; the 128 and 256 benchmark shapes likely need different tile/epilogue tactics. |
+| [A Few Fit Most: Improving Performance Portability of SGEMM on GPUs using Multi-Versioning](https://arxiv.org/abs/2507.15277) | A single GEMM kernel rarely stays near-optimal across devices and shapes; a small set of generated variants can be more portable than one universal kernel. | NovaX fused-mm should move toward a shape-keyed kernel family, but variants need measured selection. A hand-picked exact-tile version without profiling is still just a static guess. |
 | [OptiML: An End-to-End Framework for Program Synthesis and CUDA Kernel Optimization](https://arxiv.org/abs/2602.12305) | Kernel optimization is framed as search under verification, with profiler-aware rewards guiding edits. | Fast-math substitutions should be treated as benchmarked candidates, not assumed wins; NovaX needs confirmation runs and correctness/latency gates for approximate math. |
 | [FlashFuser: Expanding the Scale of Kernel Fusion for Compute-Intensive Operators via Inter-Core Connection](https://arxiv.org/abs/2512.12949) | Large fusion wins come from reducing memory traffic with hardware-aware data movement and scheduling, not just syntactically combining operators. | NovaX's fused-mm edge needs a real tiled epilogue/fusion strategy; descriptor or stream-state micro-caching is unlikely to be enough. |
 | [CODA: Rewriting Transformer Blocks as GEMM-Epilogue Programs](https://arxiv.org/abs/2605.19269) | A 2026 result argues that many memory-bound transformer side operations should execute as composable GEMM epilogues while GEMM output tiles are still on chip. | NovaX's fused-mm path should move toward true GEMM-epilogue fusion, not GEMM followed by a separate epilogue kernel. |
@@ -138,6 +139,11 @@ Experiment note:
   improvements and eight regressions. The current 16x16 tile remains the better
   hand-written CUDA baseline for these shapes; future fused-mm work should use
   profile/autotune search rather than another static tile guess.
+- `53d31b8` tested an exact 16x16 tiled variant for divisible shapes, removing
+  boundary checks and unrolling the inner loop. Correctness passed, but the
+  focused benchmark failed and the fused-mm targets did not improve enough to
+  count. This reinforces the multi-versioning lesson: shape variants need
+  measured selection, not just plausible simplification.
 - `0c8c0ac` enabled TF32 tensor math for the square cuBLAS path at 256x256 and
   larger. It qualified twice. The primary run improved `matmul_512` by 1.59x,
   `matmul_1024` by 1.52x, and `matmul_256` by 1.23x while keeping the 128x128
@@ -215,6 +221,10 @@ Experiment note:
   had zero improvements and five regressions. This supports the epilogue-fusion
   lesson: the cost is not the scalar bias load; the larger issue is using a
   naive FP32 tile instead of a Tensor Core GEMM with true epilogue fusion.
+- `53d31b8` removed exact-tile boundary predicates from the naive fused-mm
+  kernel. It did not produce a durable target win. The likely bottleneck is
+  still arithmetic throughput/memory scheduling versus vendor Tensor Core paths,
+  not the boundary guards in the current benchmark shapes.
 - `4a31903` retested direct fused-expression building as a Python front-end
   optimization. The result was directionally good for `fusion_chain5`, but not
   strong enough to pass the focused gate. This supports the AutoKernel/FuseFlow
@@ -228,6 +238,7 @@ Experiment note:
 - cuBLAS state micro-caching unless the matmul or fused-mm targets themselves
   improve.
 - Static fused-mm tile changes without profiling or an autotune search.
+- Exact-tile fused-mm variants that only remove boundary checks.
 - GEMM plus a separate epilogue launch as a substitute for true epilogue fusion.
 - Fast-math substitutions without repeatable target-case wins.
 - Pointer qualifier or signature-only fused-kernel tweaks.
