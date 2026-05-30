@@ -27,6 +27,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [FlashInfer: Efficient and Customizable Attention Engine for LLM Inference Serving](https://arxiv.org/abs/2501.01005) | High-performance serving combines JIT-specialized templates, memory-layout choices, load-balanced scheduling, and compatibility with CUDA Graph static requirements. | NovaX should make graph-captured static workloads first-class: fixed-shape graph keys, capture-safe memory reuse, and explicit replay APIs. |
 | [KernelBench: Can LLMs Write Efficient GPU Kernels?](https://arxiv.org/abs/2502.10517) | LLM-generated kernels need correctness checks, execution feedback, and profiling feedback. Even frontier methods match PyTorch in fewer than 20 percent of cases without strong iteration. | Autoresearch should not trust plausible kernel edits. Every hypothesis needs tests, benchmark comparison, and preferably profiling evidence. |
 | [AutoKernel: Autonomous GPU Kernel Optimization via Iterative Agent-Driven Search](https://arxiv.org/abs/2603.21331) | A 2026 autonomous kernel loop profiles a model, ranks bottlenecks by Amdahl impact, then validates candidates through smoke tests, shape sweeps, numerical checks, determinism checks, and edge cases before recording speedups. | NovaX's loop should keep the current correctness-plus-benchmark gate, but add bottleneck ranking/profiling notes so experiments attack the cases that dominate focused geomean. |
+| [KernelAgent: Hardware-Guided GPU Kernel Optimization via Multi-Agent Orchestration](https://pytorch.org/blog/kernelagent-hardware-guided-gpu-kernel-optimization-via-multi-agent-orchestration/) | PyTorch's 2026 hardware-guided loop emphasizes profiler-derived bottleneck diagnosis before proposing kernel changes. | NovaX should increasingly attach profiling notes to experiments; pure Python launch-source caching can look plausible but still sit below benchmark noise. |
 | [TileLang: A Composable Tiled Programming Model for AI Systems](https://arxiv.org/abs/2504.17577) | Separating dataflow from scheduling gives a usable way to express tiled kernels while leaving thread binding, layout, tensorization, and pipelining tunable. | A future NovaX backend could generate TileLang/Triton-like kernels from focused graph patterns instead of hand-authoring each CUDA kernel. |
 | [CUDA-LLM: LLMs Can Write Efficient CUDA Kernels](https://arxiv.org/abs/2506.09092) | Automated CUDA generation works better when correctness, compile success, and measured latency are jointly optimized through feedback. | Treat NovaX autoresearch as a feedback loop: generate one small kernel idea, run correctness, benchmark focused cases, log result, then revise. |
 | [TritonForge: Profiling-Guided Framework for Automated Triton Kernel Optimization](https://arxiv.org/abs/2512.09196) | Profiling-guided iterative transformations are a practical path toward better Triton kernels. Runtime measurements drive the next edit. | Add optional profiling artifacts to future loops, especially for fusion and fused matmul cases, so changes target measured stalls rather than guesses. |
@@ -246,6 +247,11 @@ Experiment note:
   but the focused suite failed twice on unrelated noise. This reinforces that
   small launch-dispatch cleanups are below the noise floor unless the full gate
   stays green.
+- `2a90d48` cached finalized fused launch kernels to avoid rebuilding CUDA
+  source strings on repeated fused expressions. It qualified once, then failed
+  confirmation and tiebreaker. This supports the KernelAgent/AutoKernel lesson:
+  optimization turns should prioritize profiled bottlenecks over plausible
+  Python-cache edits once timings are near the noise floor.
 
 ## Things Not To Repeat Blindly
 
@@ -266,3 +272,5 @@ Experiment note:
   green across confirmation runs.
 - Shape-specific dispatch micro-tweaks unless they qualify, even when the target
   row itself improves.
+- Fused launch-source caching without profiling evidence and repeatable focused
+  qualification.
