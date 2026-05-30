@@ -23,6 +23,9 @@ _cublas_handle = None
 _tensor_cls = None
 
 _CUBLAS_OP_N = 0
+_CUDA_R_32F = 0
+_CUBLAS_COMPUTE_32F_FAST_TF32 = 77
+_CUBLAS_GEMM_DEFAULT_TENSOR_OP = 99
 _CUBLAS_DEFAULT_MATH = 0
 _CUBLAS_TF32_TENSOR_OP_MATH = 3
 _cublas_math_mode = None
@@ -139,6 +142,28 @@ def _get_cublas():
             lib.cublasSetStream_v2.restype = ctypes.c_int
             lib.cublasSetMathMode.argtypes = [ctypes.c_void_p, ctypes.c_int]
             lib.cublasSetMathMode.restype = ctypes.c_int
+            lib.cublasGemmEx.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            lib.cublasGemmEx.restype = ctypes.c_int
             lib.cublasSgemm_v2.argtypes = [
                 ctypes.c_void_p,
                 ctypes.c_int,
@@ -737,6 +762,39 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
     alpha = ctypes.c_float(1.0)
     beta = ctypes.c_float(0.0)
     _set_cublas_stream(lib, handle)
+    if M >= 256 and hasattr(lib, "cublasGemmEx"):
+        try:
+            status = lib.cublasGemmEx(
+                handle,
+                _CUBLAS_OP_N,
+                _CUBLAS_OP_N,
+                ctypes.c_int(N),
+                ctypes.c_int(M),
+                ctypes.c_int(K),
+                ctypes.cast(ctypes.byref(alpha), ctypes.c_void_p),
+                ctypes.c_void_p(int(b.gpu_ptr)),
+                ctypes.c_int(_CUDA_R_32F),
+                ctypes.c_int(N),
+                ctypes.c_void_p(int(a.gpu_ptr)),
+                ctypes.c_int(_CUDA_R_32F),
+                ctypes.c_int(K),
+                ctypes.cast(ctypes.byref(beta), ctypes.c_void_p),
+                ctypes.c_void_p(int(out_gpu)),
+                ctypes.c_int(_CUDA_R_32F),
+                ctypes.c_int(N),
+                ctypes.c_int(_CUBLAS_COMPUTE_32F_FAST_TF32),
+                ctypes.c_int(_CUBLAS_GEMM_DEFAULT_TENSOR_OP),
+            )
+            if status == 0:
+                Tensor = _get_tensor_cls()
+                result = Tensor(out_gpu, gpu=True, inputs=[a, b])
+                result.shape = (M, N)
+                result.size = M * N
+                result.dtype = np.float32
+                return result
+        except Exception:
+            pass
+
     math_mode = _CUBLAS_TF32_TENSOR_OP_MATH if M >= 256 else _CUBLAS_DEFAULT_MATH
     _set_cublas_math_mode(lib, handle, math_mode)
     try:
