@@ -640,6 +640,10 @@ def launch_matmul(a, b):
     if cublas_out is not None:
         return cublas_out
 
+    exact64_out = _launch_matmul_exact64(a, b, M, K, N)
+    if exact64_out is not None:
+        return exact64_out
+
     TILE = 16
     kernel_src = f"""
     #define TILE_SIZE {TILE}
@@ -679,6 +683,45 @@ def launch_matmul(a, b):
     result = Tensor(out_gpu, gpu=True, inputs=[a, b])
     result.shape = (M, N)
     result.size = M * N
+    result.dtype = np.float32
+    return result
+
+
+def _launch_matmul_exact64(a, b, M: int, K: int, N: int):
+    if M != 64 or K != 64 or N != 64:
+        return None
+
+    kernel_src = """
+    __global__ void matmul_exact64_kernel(const float* A, const float* B, float* C) {
+        __shared__ float As[16][16];
+        __shared__ float Bs[16][16];
+        int row = blockIdx.y * 16 + threadIdx.y;
+        int col = blockIdx.x * 16 + threadIdx.x;
+        float acc = 0.0f;
+        #pragma unroll
+        for (int t = 0; t < 4; t++) {
+            As[threadIdx.y][threadIdx.x] = A[row * 64 + t * 16 + threadIdx.x];
+            Bs[threadIdx.y][threadIdx.x] = B[(t * 16 + threadIdx.y) * 64 + col];
+            __syncthreads();
+            #pragma unroll
+            for (int k = 0; k < 16; k++) {
+                acc += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+            }
+            __syncthreads();
+        }
+        C[row * 64 + col] = acc;
+    }
+    """
+    func = get_kernel("matmul_exact64_kernel", kernel_src)
+    out_gpu = mempool.alloc(64 * 64 * 4)
+    stream = _get_stream()
+    func(a.gpu_ptr, b.gpu_ptr, out_gpu,
+         block=(16, 16, 1), grid=(4, 4, 1), stream=stream)
+
+    Tensor = _get_tensor_cls()
+    result = Tensor(out_gpu, gpu=True, inputs=[a, b])
+    result.shape = (64, 64)
+    result.size = 64 * 64
     result.dtype = np.float32
     return result
 
