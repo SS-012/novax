@@ -284,6 +284,11 @@ Experiment note:
   regressed by 1.13x and the focused gate failed. This supports the CODA and
   hardware-feedback lesson: after the GEMM route is fixed, the epilogue launch
   dominates enough that local vectorization can be neutral or harmful.
+- `2d4e508` broadened the exact zero-bias fused-mm cuBLAS path to the smaller
+  `128x256x128` shape. Correctness passed, but both smaller fused-mm rows
+  regressed, with `fused_mm_linear_128_256_128` at 1.38x the saved best. This
+  supports the multi-versioning lesson: a vendor-library route that wins at one
+  shape can lose at the adjacent smaller shape, so the gate must stay exact.
 
 ## Things Not To Repeat Blindly
 
@@ -314,3 +319,5 @@ Experiment note:
   contracts the multiply-add where profitable.
 - Vectorizing the separate ReLU epilogue on the exact 256 fused-mm path; the
   scalar epilogue was faster under the focused gate.
+- Broadening the zero-bias fused-mm cuBLAS route to `128x256x128`; the original
+  single-kernel fused-mm path is faster for that smaller shape.
