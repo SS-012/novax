@@ -20,9 +20,43 @@ _kernel_cache = {}
 _stream = None
 _cublas_lib = None
 _cublas_handle = None
+_cublaslt_lib = None
+_cublaslt_handle = None
+_cublaslt_bias_relu_cache = {}
 _tensor_cls = None
 
 _CUBLAS_OP_N = 0
+_CUDA_R_32F = 0
+_CUBLAS_COMPUTE_32F = 68
+_CUBLASLT_MATMUL_DESC_EPILOGUE = 7
+_CUBLASLT_MATMUL_DESC_BIAS_POINTER = 8
+_CUBLASLT_EPILOGUE_RELU_BIAS = 6
+_CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES = 1
+
+
+class _CublasLtMatmulAlgo(ctypes.Structure):
+    _fields_ = [("data", ctypes.c_uint64 * 8)]
+
+
+class _CublasLtMatmulHeuristicResult(ctypes.Structure):
+    _fields_ = [
+        ("algo", _CublasLtMatmulAlgo),
+        ("workspaceSize", ctypes.c_size_t),
+        ("state", ctypes.c_int),
+        ("wavesCount", ctypes.c_float),
+        ("reserved", ctypes.c_int * 4),
+    ]
+
+
+class _CublasLtBiasReluConfig:
+    def __init__(self, op_desc, a_desc, b_desc, c_desc, d_desc, pref, heuristic):
+        self.op_desc = op_desc
+        self.a_desc = a_desc
+        self.b_desc = b_desc
+        self.c_desc = c_desc
+        self.d_desc = d_desc
+        self.pref = pref
+        self.heuristic = heuristic
 
 
 def _broadcast_index_expr(t, output_shape, output_size, idx_expr="idx"):
@@ -103,6 +137,18 @@ def _cublas_candidates():
     return [os.path.join(root, name) for root in roots for name in names]
 
 
+def _cublaslt_candidates():
+    names = ("cublasLt64_13.dll", "cublasLt64_12.dll", "cublasLt64_11.dll")
+    roots = []
+    cuda_path = os.environ.get("CUDA_PATH")
+    if cuda_path:
+        roots.extend([
+            os.path.join(cuda_path, "bin", "x64"),
+            os.path.join(cuda_path, "bin"),
+        ])
+    return [os.path.join(root, name) for root in roots for name in names]
+
+
 def _destroy_cublas():
     global _cublas_handle
     if _cublas_lib is not None and _cublas_handle is not None:
@@ -111,6 +157,32 @@ def _destroy_cublas():
         except Exception:
             pass
         _cublas_handle = None
+
+
+def _destroy_cublaslt():
+    global _cublaslt_handle
+    if _cublaslt_lib is not None:
+        for cfg in list(_cublaslt_bias_relu_cache.values()):
+            for name in ("op_desc", "a_desc", "b_desc", "c_desc", "d_desc", "pref"):
+                ptr = getattr(cfg, name, None)
+                if not ptr:
+                    continue
+                try:
+                    if name == "op_desc":
+                        _cublaslt_lib.cublasLtMatmulDescDestroy(ptr)
+                    elif name == "pref":
+                        _cublaslt_lib.cublasLtMatmulPreferenceDestroy(ptr)
+                    else:
+                        _cublaslt_lib.cublasLtMatrixLayoutDestroy(ptr)
+                except Exception:
+                    pass
+        _cublaslt_bias_relu_cache.clear()
+    if _cublaslt_lib is not None and _cublaslt_handle is not None:
+        try:
+            _cublaslt_lib.cublasLtDestroy(_cublaslt_handle)
+        except Exception:
+            pass
+        _cublaslt_handle = None
 
 
 def _get_cublas():
@@ -161,6 +233,107 @@ def _get_cublas():
             continue
 
     _cublas_lib = False
+    return None, None
+
+
+def _get_cublaslt():
+    global _cublaslt_lib, _cublaslt_handle
+    if _cublaslt_handle is not None:
+        return _cublaslt_lib, _cublaslt_handle
+    if _cublaslt_lib is False:
+        return None, None
+
+    for path in _cublaslt_candidates():
+        if not os.path.exists(path):
+            continue
+        try:
+            dll_dir = os.path.dirname(path)
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(dll_dir)
+            lib = ctypes.CDLL(path)
+            lib.cublasLtCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+            lib.cublasLtCreate.restype = ctypes.c_int
+            lib.cublasLtDestroy.argtypes = [ctypes.c_void_p]
+            lib.cublasLtDestroy.restype = ctypes.c_int
+            lib.cublasLtMatmulDescCreate.argtypes = [
+                ctypes.POINTER(ctypes.c_void_p),
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            lib.cublasLtMatmulDescCreate.restype = ctypes.c_int
+            lib.cublasLtMatmulDescDestroy.argtypes = [ctypes.c_void_p]
+            lib.cublasLtMatmulDescDestroy.restype = ctypes.c_int
+            lib.cublasLtMatmulDescSetAttribute.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                ctypes.c_size_t,
+            ]
+            lib.cublasLtMatmulDescSetAttribute.restype = ctypes.c_int
+            lib.cublasLtMatrixLayoutCreate.argtypes = [
+                ctypes.POINTER(ctypes.c_void_p),
+                ctypes.c_int,
+                ctypes.c_uint64,
+                ctypes.c_uint64,
+                ctypes.c_int64,
+            ]
+            lib.cublasLtMatrixLayoutCreate.restype = ctypes.c_int
+            lib.cublasLtMatrixLayoutDestroy.argtypes = [ctypes.c_void_p]
+            lib.cublasLtMatrixLayoutDestroy.restype = ctypes.c_int
+            lib.cublasLtMatmulPreferenceCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+            lib.cublasLtMatmulPreferenceCreate.restype = ctypes.c_int
+            lib.cublasLtMatmulPreferenceDestroy.argtypes = [ctypes.c_void_p]
+            lib.cublasLtMatmulPreferenceDestroy.restype = ctypes.c_int
+            lib.cublasLtMatmulPreferenceSetAttribute.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                ctypes.c_size_t,
+            ]
+            lib.cublasLtMatmulPreferenceSetAttribute.restype = ctypes.c_int
+            lib.cublasLtMatmulAlgoGetHeuristic.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.POINTER(_CublasLtMatmulHeuristicResult),
+                ctypes.POINTER(ctypes.c_int),
+            ]
+            lib.cublasLtMatmulAlgoGetHeuristic.restype = ctypes.c_int
+            lib.cublasLtMatmul.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.POINTER(_CublasLtMatmulAlgo),
+                ctypes.c_void_p,
+                ctypes.c_size_t,
+                ctypes.c_void_p,
+            ]
+            lib.cublasLtMatmul.restype = ctypes.c_int
+
+            handle = ctypes.c_void_p()
+            if lib.cublasLtCreate(ctypes.byref(handle)) == 0:
+                _cublaslt_lib = lib
+                _cublaslt_handle = handle
+                atexit.register(_destroy_cublaslt)
+                return _cublaslt_lib, _cublaslt_handle
+        except Exception:
+            continue
+
+    _cublaslt_lib = False
     return None, None
 
 
@@ -710,6 +883,162 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
     return result
 
 
+def _cublaslt_create_layout(lib, rows: int, cols: int, ld: int):
+    desc = ctypes.c_void_p()
+    status = lib.cublasLtMatrixLayoutCreate(
+        ctypes.byref(desc),
+        ctypes.c_int(_CUDA_R_32F),
+        ctypes.c_uint64(rows),
+        ctypes.c_uint64(cols),
+        ctypes.c_int64(ld),
+    )
+    if status != 0:
+        return None
+    return desc
+
+
+def _cleanup_cublaslt_config(lib, cfg):
+    for name in ("op_desc", "a_desc", "b_desc", "c_desc", "d_desc", "pref"):
+        ptr = getattr(cfg, name, None)
+        if not ptr:
+            continue
+        try:
+            if name == "op_desc":
+                lib.cublasLtMatmulDescDestroy(ptr)
+            elif name == "pref":
+                lib.cublasLtMatmulPreferenceDestroy(ptr)
+            else:
+                lib.cublasLtMatrixLayoutDestroy(ptr)
+        except Exception:
+            pass
+
+
+def _get_cublaslt_bias_relu_config(lib, handle, M: int, K: int, N: int, bias):
+    key = (M, K, N, int(bias.gpu_ptr))
+    cached = _cublaslt_bias_relu_cache.get(key)
+    if cached is not None:
+        return cached
+
+    op_desc = ctypes.c_void_p()
+    if lib.cublasLtMatmulDescCreate(
+        ctypes.byref(op_desc),
+        ctypes.c_int(_CUBLAS_COMPUTE_32F),
+        ctypes.c_int(_CUDA_R_32F),
+    ) != 0:
+        return None
+
+    cfg = _CublasLtBiasReluConfig(op_desc, None, None, None, None, None, None)
+    try:
+        epilogue = ctypes.c_uint32(_CUBLASLT_EPILOGUE_RELU_BIAS)
+        if lib.cublasLtMatmulDescSetAttribute(
+            op_desc,
+            ctypes.c_int(_CUBLASLT_MATMUL_DESC_EPILOGUE),
+            ctypes.byref(epilogue),
+            ctypes.sizeof(epilogue),
+        ) != 0:
+            raise RuntimeError("failed to set cuBLASLt epilogue")
+
+        bias_ptr = ctypes.c_void_p(int(bias.gpu_ptr))
+        if lib.cublasLtMatmulDescSetAttribute(
+            op_desc,
+            ctypes.c_int(_CUBLASLT_MATMUL_DESC_BIAS_POINTER),
+            ctypes.byref(bias_ptr),
+            ctypes.sizeof(bias_ptr),
+        ) != 0:
+            raise RuntimeError("failed to set cuBLASLt bias pointer")
+
+        # Column-major view of row-major C = X @ W:
+        # D_col(N, M) = W_col(N, K) @ X_col(K, M). Bias length is N.
+        cfg.a_desc = _cublaslt_create_layout(lib, N, K, N)
+        cfg.b_desc = _cublaslt_create_layout(lib, K, M, K)
+        cfg.c_desc = _cublaslt_create_layout(lib, N, M, N)
+        cfg.d_desc = _cublaslt_create_layout(lib, N, M, N)
+        if not all((cfg.a_desc, cfg.b_desc, cfg.c_desc, cfg.d_desc)):
+            raise RuntimeError("failed to create cuBLASLt layouts")
+
+        pref = ctypes.c_void_p()
+        if lib.cublasLtMatmulPreferenceCreate(ctypes.byref(pref)) != 0:
+            raise RuntimeError("failed to create cuBLASLt preference")
+        cfg.pref = pref
+        workspace_limit = ctypes.c_uint64(0)
+        lib.cublasLtMatmulPreferenceSetAttribute(
+            pref,
+            ctypes.c_int(_CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES),
+            ctypes.byref(workspace_limit),
+            ctypes.sizeof(workspace_limit),
+        )
+
+        heuristic = _CublasLtMatmulHeuristicResult()
+        returned = ctypes.c_int()
+        status = lib.cublasLtMatmulAlgoGetHeuristic(
+            handle,
+            op_desc,
+            cfg.a_desc,
+            cfg.b_desc,
+            cfg.c_desc,
+            cfg.d_desc,
+            pref,
+            ctypes.c_int(1),
+            ctypes.byref(heuristic),
+            ctypes.byref(returned),
+        )
+        if status != 0 or returned.value < 1 or heuristic.state != 0:
+            raise RuntimeError("no cuBLASLt bias+ReLU heuristic")
+        cfg.heuristic = heuristic
+        _cublaslt_bias_relu_cache[key] = cfg
+        return cfg
+    except Exception:
+        _cleanup_cublaslt_config(lib, cfg)
+        return None
+
+
+def _launch_matmul_bias_relu_cublaslt(x, w, bias, M: int, K: int, N: int):
+    if M < 256 or K < 256 or N < 256:
+        return None
+    lib, handle = _get_cublaslt()
+    if lib is None or handle is None:
+        return None
+
+    cfg = _get_cublaslt_bias_relu_config(lib, handle, M, K, N, bias)
+    if cfg is None:
+        return None
+
+    out_gpu = mempool.alloc(M * N * 4)
+    alpha = ctypes.c_float(1.0)
+    beta = ctypes.c_float(0.0)
+    stream = _get_stream()
+    stream_handle = ctypes.c_void_p(int(stream.handle)) if stream is not None else None
+    status = lib.cublasLtMatmul(
+        handle,
+        cfg.op_desc,
+        ctypes.cast(ctypes.byref(alpha), ctypes.c_void_p),
+        ctypes.c_void_p(int(w.gpu_ptr)),
+        cfg.a_desc,
+        ctypes.c_void_p(int(x.gpu_ptr)),
+        cfg.b_desc,
+        ctypes.cast(ctypes.byref(beta), ctypes.c_void_p),
+        ctypes.c_void_p(int(out_gpu)),
+        cfg.c_desc,
+        ctypes.c_void_p(int(out_gpu)),
+        cfg.d_desc,
+        ctypes.byref(cfg.heuristic.algo),
+        None,
+        ctypes.c_size_t(0),
+        stream_handle,
+    )
+    if status != 0:
+        mempool.free(out_gpu, M * N * 4)
+        _cublaslt_bias_relu_cache.pop((M, K, N, int(bias.gpu_ptr)), None)
+        return None
+
+    Tensor = _get_tensor_cls()
+    result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
+    result.shape = (M, N)
+    result.size = M * N
+    result.dtype = np.float32
+    return result
+
+
 def launch_matmul_bias_relu(x, w, bias):
     """
     Fused matmul + bias add + ReLU in a single CUDA kernel pass.
@@ -723,6 +1052,10 @@ def launch_matmul_bias_relu(x, w, bias):
     K2, N = w.shape
     assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
+
+    cublaslt_out = _launch_matmul_bias_relu_cublaslt(x, w, bias, M, K, N)
+    if cublaslt_out is not None:
+        return cublaslt_out
 
     TILE = 16
     kernel_src = f"""
