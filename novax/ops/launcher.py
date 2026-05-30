@@ -229,12 +229,6 @@ def _optimal_reduce_block_size() -> int:
     return 256
 
 
-def _fused_block_size(expr: str) -> int:
-    if "fmaxf" in expr and "expf" not in expr and "tanhf" not in expr:
-        return min(_optimal_block_size(), 256)
-    return _optimal_block_size()
-
-
 def _multiprocessor_count() -> int:
     if cuda is None:
         return 1
@@ -349,7 +343,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     """
     func = get_kernel(op_name, kernel_src)
     out_gpu = mempool.alloc(n * 4)
-    bs = _fused_block_size(expr)
+    bs = _optimal_block_size()
     block = (bs, 1, 1)
     grid = ((n + bs - 1) // bs, 1, 1)
 
