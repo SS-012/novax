@@ -129,6 +129,13 @@ Expected mechanism:
 
 - reduce noisy blind edits and converge toward measured bottlenecks.
 
+Experiment note:
+
+- `c830f9a` retested prepared PyCUDA calls as a launch-overhead reduction.
+  Focused benchmark result: 0 improvements, 6 regressions. This reinforces that
+  launch-wrapper micro-optimizations are not enough; future work needs profiling
+  and larger graph/kernel changes.
+
 ## Things Not To Repeat Blindly
 
 - Broad eager elementwise micro-optimizations without a focused-path win.
