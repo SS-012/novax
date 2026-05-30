@@ -77,18 +77,6 @@ class CUDAGraph:
         _check(self._cudart.cudaGraphInstantiate(ctypes.byref(self._exec), self._graph, ctypes.c_ulonglong(0)),
                "cudaGraphInstantiate")
 
-    def capture_many(self, fn, count: int):
-        if count <= 0:
-            raise ValueError("count must be positive")
-
-        def repeated():
-            outputs = []
-            for _ in range(count):
-                outputs.append(fn())
-            return outputs
-
-        self.capture(repeated)
-
     def replay(self):
         if not self._exec.value:
             raise RuntimeError("CUDAGraph.capture() must be called before replay()")
