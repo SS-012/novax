@@ -338,6 +338,59 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     return Tensor(out_gpu, gpu=True, inputs=inputs)
 
 
+def launch_relu_mul_add(a, b, c):
+    """Specialized relu(a * b + c) kernel for same-shaped GPU tensors."""
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    assert a.on_gpu and b.on_gpu and c.on_gpu, "All inputs must be on GPU"
+    assert a.shape == b.shape == c.shape, "Specialized fusion requires identical shapes"
+    n = a.size
+    kernel_src = """
+    __global__ void relu_mul_add_kernel(const float* a, const float* b, const float* c, float* out, int n) {
+        int idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx < n) {
+            out[idx] = fmaxf(0.0f, a[idx] * b[idx] + c[idx]);
+        }
+    }
+    """
+    func = get_kernel("relu_mul_add_kernel", kernel_src)
+    out_gpu = mempool.alloc(n * 4)
+    bs = _optimal_block_size()
+    stream = _get_stream()
+    func(a.gpu_ptr, b.gpu_ptr, c.gpu_ptr, out_gpu, np.int32(n),
+         block=(bs, 1, 1), grid=((n + bs - 1) // bs, 1, 1), stream=stream)
+
+    Tensor = _get_tensor_cls()
+    return Tensor(out_gpu, gpu=True, inputs=[a, b, c])
+
+
+def launch_sigmoid_relu_mul_add_mul(a, b, c):
+    """Specialized sigmoid(relu(a * b + c) * a) kernel for same-shaped GPU tensors."""
+    if cuda is None:
+        raise RuntimeError("GPU not available: cannot launch kernels")
+    assert a.on_gpu and b.on_gpu and c.on_gpu, "All inputs must be on GPU"
+    assert a.shape == b.shape == c.shape, "Specialized fusion requires identical shapes"
+    n = a.size
+    kernel_src = """
+    __global__ void sigmoid_relu_mul_add_mul_kernel(const float* a, const float* b, const float* c, float* out, int n) {
+        int idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx < n) {
+            float hidden = fmaxf(0.0f, a[idx] * b[idx] + c[idx]) * a[idx];
+            out[idx] = 1.0f / (1.0f + expf(-hidden));
+        }
+    }
+    """
+    func = get_kernel("sigmoid_relu_mul_add_mul_kernel", kernel_src)
+    out_gpu = mempool.alloc(n * 4)
+    bs = _optimal_block_size()
+    stream = _get_stream()
+    func(a.gpu_ptr, b.gpu_ptr, c.gpu_ptr, out_gpu, np.int32(n),
+         block=(bs, 1, 1), grid=((n + bs - 1) // bs, 1, 1), stream=stream)
+
+    Tensor = _get_tensor_cls()
+    return Tensor(out_gpu, gpu=True, inputs=[a, b, c])
+
+
 def launch_reduce(a, op_name: str, reduce_type: str, scale: float = 1.0):
     """
     Two-pass parallel reduction kernel using shared memory.
