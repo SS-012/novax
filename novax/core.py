@@ -279,10 +279,6 @@ class Tensor:
         if (not GPU_AVAILABLE) or self.op not in (_UNARY_ELEMENTWISE | _BINARY_OPS):
             return None
 
-        specialized = self._try_eval_special_fused_elementwise(track_grad)
-        if specialized is not None:
-            return specialized
-
         folded = self._fold_constants()
         fused_expr, leaves = folded._build_fused()
         if fused_expr is None or not leaves:
@@ -294,64 +290,6 @@ class Tensor:
 
         try:
             return launch_fused(leaves, fused_expr, "fused_kernel")
-        except Exception:
-            return None
-
-    def _try_eval_special_fused_elementwise(self, track_grad: bool):
-        if track_grad:
-            return None
-
-        def same_shape_gpu(*tensors):
-            return (
-                tensors
-                and all(getattr(t, "is_leaf", False) for t in tensors)
-                and all(getattr(t, "on_gpu", False) for t in tensors)
-                and all(not getattr(t, "requires_grad", False) for t in tensors)
-                and all(t.shape == tensors[0].shape for t in tensors)
-            )
-
-        def match_mul_add_relu(node):
-            if getattr(node, "op", None) != "relu":
-                return None
-            add = node.inputs[0]
-            if getattr(add, "op", None) != "add":
-                return None
-            left, right = add.inputs
-            if getattr(left, "op", None) == "mul":
-                mul, c = left, right
-            elif getattr(right, "op", None) == "mul":
-                mul, c = right, left
-            else:
-                return None
-            a, b = mul.inputs
-            return (a, b, c) if same_shape_gpu(a, b, c) else None
-
-        try:
-            relu_args = match_mul_add_relu(self)
-            if relu_args is not None:
-                from novax.ops.launcher import launch_relu_mul_add
-                return launch_relu_mul_add(*relu_args)
-
-            if self.op != "sigmoid":
-                return None
-            mul = self.inputs[0]
-            if getattr(mul, "op", None) != "mul":
-                return None
-            left, right = mul.inputs
-            if getattr(left, "op", None) == "relu":
-                relu, tail = left, right
-            elif getattr(right, "op", None) == "relu":
-                relu, tail = right, left
-            else:
-                return None
-            relu_args = match_mul_add_relu(relu)
-            if relu_args is None:
-                return None
-            a, b, c = relu_args
-            if tail is not a:
-                return None
-            from novax.ops.launcher import launch_sigmoid_relu_mul_add_mul
-            return launch_sigmoid_relu_mul_add_mul(a, b, c)
         except Exception:
             return None
 
