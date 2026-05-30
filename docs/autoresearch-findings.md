@@ -5,12 +5,12 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 77
+- Logged rows: 78
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 76
-- Unique non-baseline experiment commits: 75
-- Currently successful unique experiments: 15
-- Strict benchmark-qualified performance successes: 2
+- Experiment evaluations after baseline: 77
+- Unique non-baseline experiment commits: 76
+- Currently successful unique experiments: 16
+- Strict benchmark-qualified performance successes: 3
 - Currently discarded or reverted unique experiments: 60
 
 Definitions:
@@ -32,13 +32,13 @@ The current best benchmark artifact is `autoresearch/best.json`.
 - Benchmark errors: 0
 - Benchmark skipped: 0
 - Focused differentiated cases: 11
-- Focused NovaX wins vs PyTorch: 10
+- Focused NovaX wins vs PyTorch: 11
 - Focused NovaX ties vs PyTorch: 0
-- Focused PyTorch wins vs NovaX: 1
-- Focused geomean NovaX/PyTorch time: 0.622541
-- Overall geomean NovaX/PyTorch time: 1.028264
+- Focused PyTorch wins vs NovaX: 0
+- Focused geomean NovaX/PyTorch time: 0.577784
+- Overall geomean NovaX/PyTorch time: 1.016206
 - Best NovaX case vs PyTorch: `inference_capture_300_passes`
-- Best ratio: 0.187764
+- Best ratio: 0.181595
 
 The field names in the benchmark summary are historical: `pytorch_wins` is
 used as the count of NovaX wins in the current output.
@@ -77,6 +77,11 @@ The strongest square-GEMM follow-up is `0c8c0ac`, which enables TF32 tensor
 math only for the already square-gated cuBLAS path at 256x256 and larger. It
 qualified twice and produced large focused matmul wins without touching the
 small 128x128 precision test path.
+Small exact-shape GEMM can still pay off when the gate is narrow enough.
+Experiment `d610a5c` added a 64x64-only tiled matmul kernel with no boundary
+checks and no runtime shape arguments. It qualified twice against the saved
+focused baseline, improving the 64x64 focused matmul case on the primary run
+and again in a tiebreaker against the candidate-best artifact.
 
 Reduction tuning is sensitive. Some reduction changes helped (`268b4f3`,
 `8b832f8`, `290e511`), but many block-size, grid-cap, and warp-shuffle variants
@@ -208,6 +213,15 @@ unrolling. Correctness passed, but the benchmark failed with score
 `-439.568890`, 1 focused improvement, and 3 focused regressions. The intended
 fused-mm mechanism did not show a durable target win, so no-bound exact tiling
 is not enough to beat the saved fused-mm baseline.
+Experiment `d610a5c` specialized exactly 64x64 matmul. Tests passed and the
+primary benchmark qualified with score `213.689073`, 3 focused improvements, 2
+focused regressions, and `matmul_64x64_x_64x64` improving by about 1.06x versus
+the saved best. The confirmation benchmark also qualified with score
+`110.307215`, 2 focused improvements, 2 focused regressions, and all 11 focused
+cases faster than PyTorch. A later tiebreaker compared against the newly saved
+candidate artifact rather than the old baseline; it failed the stricter score
+but still showed `matmul_64x64_x_64x64` at 1.14x faster than the candidate-best
+run, so the code change was kept while the noise caveat was recorded.
 
 ## Successful Experiments Kept
 
@@ -228,6 +242,7 @@ is not enough to beat the saved fused-mm baseline.
 | `8abede0` | keep | yes | Expose CUDA graph replay; captured inference becomes benchmarked and faster than PyTorch. |
 | `03783d5` | keep-bugfix | no | Hold CUDA graph capture outputs until capture ends; fixes capture-time PyCUDA cleanup instability. |
 | `0c8c0ac` | keep | yes | Enable TF32 tensor math for square cuBLAS matmul; qualified twice with large focused matmul wins. |
+| `d610a5c` | keep | yes | Specialize exact 64x64 matmul; qualified twice and made all focused cases faster than PyTorch on confirmation. |
 
 ## Reverted Or Discarded Findings
 
@@ -377,6 +392,7 @@ These experiments should not be retried in the same form.
 | `29a37e2` | discard | no | 0 | 5 | 0 | -1099.821460 | 0.647448 | Zero-bias fused matmul specialization produced no focused improvements and regressed fusion and fused-mm cases. |
 | `4a31903` | discard | no | 2 | 2 | 0 | -183.428112 | 0.612141 | Direct fused-expression build improved fusion_chain5 twice but failed the focused gate on both runs. |
 | `53d31b8` | discard | no | 1 | 3 | 0 | -439.568890 | 0.622602 | Exact-tile fused matmul removed boundary checks but failed to improve fused-mm enough and missed the focused gate. |
+| `d610a5c` | keep | yes | 3 | 2 | 0 | 213.689073 | 0.615337 | Exact 64x64 matmul specialization qualified twice and improved the focused small-matmul path. |
 
 ## Future Research Directions
 

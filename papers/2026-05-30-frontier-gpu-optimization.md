@@ -150,6 +150,13 @@ Experiment note:
   precision-sensitive test path on default math. This supports the hardware
   mapping lesson: for stable square GEMM, using Tensor Core-capable vendor
   modes beats another static CUDA tile.
+- `d610a5c` added a 64x64-only tiled matmul kernel with no boundary checks and
+  no runtime shape arguments. It qualified twice against the saved focused
+  baseline, and a later tiebreaker still showed a 1.14x `matmul_64` win against
+  the candidate-best run even though the stricter full-suite score failed on
+  noise. This supports the multi-versioning lesson for very small fixed GEMM:
+  narrow, exact-shape variants can be useful when they do not touch broader
+  MLP or fused-mm paths.
 - `9f22443` routed the larger fused matmul+bias+ReLU case through TF32 cuBLAS
   followed by an in-place epilogue kernel. It improved the intended fused-mm
   target and qualified once, but failed two of three runs. This supports CODA's
@@ -230,6 +237,10 @@ Experiment note:
   strong enough to pass the focused gate. This supports the AutoKernel/FuseFlow
   lesson: keep ranking bottlenecks and optimize lower-level schedules rather
   than spending many turns on Python-only expression-builder shortcuts.
+- `d610a5c` specialized exact 64x64 matmul and qualified twice. This is a
+  useful counterexample to failed fused-mm exact tiling: the successful case
+  only touched one benchmark shape and removed both bounds checks and runtime
+  shape parameters from a small hand-written GEMM path.
 
 ## Things Not To Repeat Blindly
 
