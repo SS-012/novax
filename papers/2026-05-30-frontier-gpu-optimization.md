@@ -296,6 +296,11 @@ Experiment note:
   only, while regressing five focused cases. This supports the CUDA-L2 and
   FlashFuser lesson: matmul/fused-mm progress needs searched kernel plans or
   real fusion dataflow changes, not small library state micro-caches.
+- `5bf0e24` reused global ctypes alpha/beta scalar pointers for existing
+  cuBLAS SGEMM calls. It improved `matmul_1024x1024_x_1024x1024`, but still
+  failed the focused gate with four regressions. This reinforces that cuBLAS
+  Python-wrapper micro-caches are not the durable route unless the full focused
+  suite stays green.
 - `a8d9886` used `__expf` only in non-leaf fused sigmoid expressions. It
   improved `fusion_chain5_n1000000` once, then failed confirmation with the
   chain itself regressing. This supports the OptiML lesson: approximate math
@@ -410,6 +415,8 @@ Experiment note:
 - General rectangular cuBLAS routing without shape gates.
 - cuBLAS state micro-caching unless the matmul or fused-mm targets themselves
   improve.
+- cuBLAS scalar/pointer micro-caching as a standalone change; it produced one
+  matmul win but failed the focused regression gate.
 - Static fused-mm tile changes without profiling or an autotune search.
 - Exact-tile fused-mm variants that only remove boundary checks.
 - GEMM plus a separate epilogue launch as a substitute for true epilogue fusion.
