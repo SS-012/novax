@@ -31,6 +31,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [TritonForge: Profiling-Guided Framework for Automated Triton Kernel Optimization](https://arxiv.org/abs/2512.09196) | Profiling-guided iterative transformations are a practical path toward better Triton kernels. Runtime measurements drive the next edit. | Add optional profiling artifacts to future loops, especially for fusion and fused matmul cases, so changes target measured stalls rather than guesses. |
 | [ParallelKittens: Systematic and Practical Simplification of Multi-GPU AI Kernels](https://arxiv.org/abs/2511.13940) | Multi-GPU performance depends heavily on overlapping communication, scheduling, and data-transfer primitives. | Not an immediate single-GPU benchmark target, but relevant if NovaX expands beyond one GPU. |
 | [CUDA-L2: Surpassing cuBLAS Performance for Matrix Multiplication through Reinforcement Learning](https://arxiv.org/abs/2512.02551) | The strongest matmul results come from automated search across a large kernel configuration space with measured execution speed as the reward. | NovaX should not expect static hand tweaks to beat cuBLAS/PyTorch broadly; serious matmul wins need a shape-keyed autotuning loop or vendor-library plan cache. |
+| [OptiML: An End-to-End Framework for Program Synthesis and CUDA Kernel Optimization](https://arxiv.org/abs/2602.12305) | Kernel optimization is framed as search under verification, with profiler-aware rewards guiding edits. | Fast-math substitutions should be treated as benchmarked candidates, not assumed wins; NovaX needs confirmation runs and correctness/latency gates for approximate math. |
 | [FlashFuser: Expanding the Scale of Kernel Fusion for Compute-Intensive Operators via Inter-Core Connection](https://arxiv.org/abs/2512.12949) | Large fusion wins come from reducing memory traffic with hardware-aware data movement and scheduling, not just syntactically combining operators. | NovaX's fused-mm edge needs a real tiled epilogue/fusion strategy; descriptor or stream-state micro-caching is unlikely to be enough. |
 | [Nautilus: An Auto-Scheduling Tensor Compiler for Efficient Tiled GPU Kernels](https://arxiv.org/abs/2604.14825) | A 2026 tensor compiler result shows that expression rewrites, high-level transformations, and tile optimizations need to be searched jointly rather than hand-applied one at a time. | NovaX's next meaningful gains likely need a small IR plus scheduler/autotuner; isolated hand-specialized kernels have repeatedly failed the focused gate. |
 | [GPUOS: A GPU Operating System Primitive for Transparent Operation Fusion](https://arxiv.org/abs/2604.17861) | A 2026 runtime direction for many small tensor ops is to avoid repeated host launches by using persistent GPU-side operation injection. | NovaX's Python overhead ceiling likely needs either larger graph capture regions or a lower-level runtime loop; individual Python-call optimizations are not enough. |
@@ -173,6 +174,11 @@ Experiment note:
   only, while regressing five focused cases. This supports the CUDA-L2 and
   FlashFuser lesson: matmul/fused-mm progress needs searched kernel plans or
   real fusion dataflow changes, not small library state micro-caches.
+- `a8d9886` used `__expf` only in non-leaf fused sigmoid expressions. It
+  improved `fusion_chain5_n1000000` once, then failed confirmation with the
+  chain itself regressing. This supports the OptiML lesson: approximate math
+  edits must be treated as verified search candidates rather than obvious
+  optimizations.
 
 ## Things Not To Repeat Blindly
 
@@ -181,6 +187,7 @@ Experiment note:
 - cuBLAS state micro-caching unless the matmul or fused-mm targets themselves
   improve.
 - Static fused-mm tile changes without profiling or an autotune search.
+- Fast-math substitutions without repeatable target-case wins.
 - Softmax fast-math changes that do not improve the softmax benchmark itself.
 - GPU backward rewrites that touch unrelated eager/autograd behavior.
 - CUDA graph replay micro-tweaks unless captured inference itself improves.

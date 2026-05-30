@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 70
+- Logged rows: 71
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 69
-- Unique non-baseline experiment commits: 68
+- Experiment evaluations after baseline: 70
+- Unique non-baseline experiment commits: 69
 - Currently successful unique experiments: 14
 - Strict benchmark-qualified performance successes: 1
-- Currently discarded or reverted unique experiments: 54
+- Currently discarded or reverted unique experiments: 55
 
 Definitions:
 
@@ -163,6 +163,11 @@ It improved `inference_capture_300_passes` on two runs by about 1.14x and
 case regressions in the same benchmark process. The idea is directionally
 aligned with CUDA graph batching, but it was not safe to keep under the current
 gate.
+Experiment `a8d9886` used CUDA `__expf` only for non-leaf fused sigmoid
+expressions, targeting `fusion_chain5_n1000000`. The first run improved that
+target by about 1.03x but failed the focused gate; the confirmation run failed
+again and the fusion chain itself regressed. Approximate exponentials are not a
+durable focused-fusion win in this form.
 
 ## Successful Experiments Kept
 
@@ -243,6 +248,7 @@ These experiments should not be retried in the same form.
 | `9a904b1` | discard | Cached cuBLAS stream binding improved captured inference only, while regressing five focused cases. |
 | `c5e8268` | discard | A 16x32 rectangular fused-mm tile passed correctness but produced zero focused improvements and eight regressions. |
 | `5626de1` | discard | Capturing all repeated inference passes into one graph improved capture twice but failed the focused regression gate twice. |
+| `a8d9886` | discard | Fast `__expf` in fused sigmoid chains improved `fusion_chain5` once but failed confirmation and the focused gate. |
 
 ## Full Experiment Ledger
 
@@ -318,6 +324,7 @@ These experiments should not be retried in the same form.
 | `9a904b1` | discard | no | 1 | 5 | 0 | -4158.420902 | 0.688372 | Cached cuBLAS stream binding improved captured inference but regressed five focused cases including fused-mm and matmul. |
 | `c5e8268` | discard | no | 0 | 8 | 0 | -3943.210591 | 0.728258 | Rectangular 16x32 fused matmul tile failed to improve focused baseline and regressed fused-mm and matmul cases. |
 | `5626de1` | discard | no | 1 | 4 | 0 | -666.673293 | 0.677285 | Repeated inference graph capture improved captured inference twice but failed focused regression gate on both runs. |
+| `a8d9886` | discard | no | 1 | 4 | 0 | -1549.618580 | 0.666400 | Fast __expf for fused sigmoid chains improved fusion_chain5 once but failed confirmation and focused regression gate. |
 
 ## Future Research Directions
 
