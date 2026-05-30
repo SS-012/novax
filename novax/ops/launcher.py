@@ -692,7 +692,11 @@ def _launch_matmul_exact64(a, b, M: int, K: int, N: int):
         return None
 
     kernel_src = """
-    __global__ void matmul_exact64_kernel(const float* A, const float* B, float* C) {
+    __global__ void matmul_exact64_kernel(
+        const float* __restrict__ A,
+        const float* __restrict__ B,
+        float* __restrict__ C
+    ) {
         __shared__ float As[16][16];
         __shared__ float Bs[16][16];
         int row = blockIdx.y * 16 + threadIdx.y;
