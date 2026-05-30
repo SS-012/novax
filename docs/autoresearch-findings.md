@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 69
+- Logged rows: 70
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 68
-- Unique non-baseline experiment commits: 67
+- Experiment evaluations after baseline: 69
+- Unique non-baseline experiment commits: 68
 - Currently successful unique experiments: 14
 - Strict benchmark-qualified performance successes: 1
-- Currently discarded or reverted unique experiments: 53
+- Currently discarded or reverted unique experiments: 54
 
 Definitions:
 
@@ -156,6 +156,13 @@ matmul+bias+ReLU primitive, plus a direct GPU correctness test. Correctness
 passed, but the focused benchmark showed zero improvements and eight
 regressions versus the saved best. The saved 16x16 fused-mm kernel remains
 better for the current focused shapes.
+Experiment `5626de1` added `CUDAGraph.capture_many()` and changed captured
+repeated inference to capture all 300 fixed-shape passes into one graph replay.
+It improved `inference_capture_300_passes` on two runs by about 1.14x and
+1.19x, but both runs failed the focused regression gate due unrelated focused
+case regressions in the same benchmark process. The idea is directionally
+aligned with CUDA graph batching, but it was not safe to keep under the current
+gate.
 
 ## Successful Experiments Kept
 
@@ -235,6 +242,7 @@ These experiments should not be retried in the same form.
 | `77ed4e7` | discard | Batched CUDA graph replay in Python did not improve captured inference and failed the focused score gate. |
 | `9a904b1` | discard | Cached cuBLAS stream binding improved captured inference only, while regressing five focused cases. |
 | `c5e8268` | discard | A 16x32 rectangular fused-mm tile passed correctness but produced zero focused improvements and eight regressions. |
+| `5626de1` | discard | Capturing all repeated inference passes into one graph improved capture twice but failed the focused regression gate twice. |
 
 ## Full Experiment Ledger
 
@@ -309,6 +317,7 @@ These experiments should not be retried in the same form.
 | `77ed4e7` | discard | no | 2 | 2 | 0 | -192.839153 | 0.696145 | Batched cuda graph replay API did not improve capture and failed focused research score. |
 | `9a904b1` | discard | no | 1 | 5 | 0 | -4158.420902 | 0.688372 | Cached cuBLAS stream binding improved captured inference but regressed five focused cases including fused-mm and matmul. |
 | `c5e8268` | discard | no | 0 | 8 | 0 | -3943.210591 | 0.728258 | Rectangular 16x32 fused matmul tile failed to improve focused baseline and regressed fused-mm and matmul cases. |
+| `5626de1` | discard | no | 1 | 4 | 0 | -666.673293 | 0.677285 | Repeated inference graph capture improved captured inference twice but failed focused regression gate on both runs. |
 
 ## Future Research Directions
 

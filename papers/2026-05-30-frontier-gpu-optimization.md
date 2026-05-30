@@ -33,7 +33,9 @@ elementwise or activation case. Keep those cases as guardrails.
 | [CUDA-L2: Surpassing cuBLAS Performance for Matrix Multiplication through Reinforcement Learning](https://arxiv.org/abs/2512.02551) | The strongest matmul results come from automated search across a large kernel configuration space with measured execution speed as the reward. | NovaX should not expect static hand tweaks to beat cuBLAS/PyTorch broadly; serious matmul wins need a shape-keyed autotuning loop or vendor-library plan cache. |
 | [FlashFuser: Expanding the Scale of Kernel Fusion for Compute-Intensive Operators via Inter-Core Connection](https://arxiv.org/abs/2512.12949) | Large fusion wins come from reducing memory traffic with hardware-aware data movement and scheduling, not just syntactically combining operators. | NovaX's fused-mm edge needs a real tiled epilogue/fusion strategy; descriptor or stream-state micro-caching is unlikely to be enough. |
 | [Nautilus: An Auto-Scheduling Tensor Compiler for Efficient Tiled GPU Kernels](https://arxiv.org/abs/2604.14825) | A 2026 tensor compiler result shows that expression rewrites, high-level transformations, and tile optimizations need to be searched jointly rather than hand-applied one at a time. | NovaX's next meaningful gains likely need a small IR plus scheduler/autotuner; isolated hand-specialized kernels have repeatedly failed the focused gate. |
+| [GPUOS: A GPU Operating System Primitive for Transparent Operation Fusion](https://arxiv.org/abs/2604.17861) | A 2026 runtime direction for many small tensor ops is to avoid repeated host launches by using persistent GPU-side operation injection. | NovaX's Python overhead ceiling likely needs either larger graph capture regions or a lower-level runtime loop; individual Python-call optimizations are not enough. |
 | [Hybrid JIT-CUDA Graph Optimization for Low-Latency Large Language Model Inference](https://arxiv.org/abs/2604.23467) | High-performance low-latency inference partitions static work into CUDA Graph replay and dynamic work into JIT-compiled kernels, reducing launch overhead and latency variance. | NovaX should keep pushing static graph replay, but pure Python replay loops are unlikely to be enough; the replay loop needs to move lower than Python or be amortized by larger captured regions. |
+| [Boosting Performance of Iterative Applications on GPUs: Kernel Batching with CUDA Graphs](https://arxiv.org/abs/2501.09398) | Iterative launch-bound applications can batch multiple iterations by unrolling them into one CUDA Graph, reducing per-iteration launch overhead. | A `capture_many` style API is plausible for repeated fixed-shape NovaX workloads, but the benchmark gate needs stable evidence that only the intended graph path changes. |
 
 ## Cross-Paper Themes
 
@@ -160,6 +162,12 @@ Experiment note:
   benchmark to use it. The focused gate still failed and captured inference was
   slower than the saved best. This supports the hybrid JIT/CUDA Graph lesson:
   replay batching needs to move below Python or capture larger regions.
+- `5626de1` added a `CUDAGraph.capture_many()` API and captured all 300 fixed
+  repeated-inference passes inside one graph replay. Captured inference improved
+  twice by about 1.14x and 1.19x versus the saved best, but the experiment still
+  failed the focused gate on unrelated benchmark-case regressions. The idea
+  remains aligned with CUDA graph kernel batching, but needs a more stable gate
+  or isolated graph-path benchmark before it can be kept.
 - `9a904b1` cached the cuBLAS stream binding so stable square-GEMM calls would
   skip repeated `cublasSetStream` ctypes calls. It improved captured inference
   only, while regressing five focused cases. This supports the CUDA-L2 and
