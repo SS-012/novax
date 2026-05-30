@@ -810,20 +810,24 @@ def _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M: int, K: int, N: int
         return None
 
     kernel_src = """
-    __global__ void relu_inplace_kernel(float* C, int total) {
+    __global__ void relu_inplace_65536_float4_kernel(float* C) {
         int idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx < total) {
-            C[idx] = fmaxf(0.0f, C[idx]);
-        }
+        float4* C4 = reinterpret_cast<float4*>(C);
+        float4 v = C4[idx];
+        v.x = fmaxf(0.0f, v.x);
+        v.y = fmaxf(0.0f, v.y);
+        v.z = fmaxf(0.0f, v.z);
+        v.w = fmaxf(0.0f, v.w);
+        C4[idx] = v;
     }
     """
     try:
-        func = get_kernel("relu_inplace_kernel", kernel_src)
-        total = M * N
+        func = get_kernel("relu_inplace_65536_float4_kernel", kernel_src)
+        total_vec = (M * N) // 4
         bs = _optimal_block_size()
         stream = _get_stream()
-        func(out_gpu, np.int32(total),
-             block=(bs, 1, 1), grid=((total + bs - 1) // bs, 1, 1), stream=stream)
+        func(out_gpu,
+             block=(bs, 1, 1), grid=(total_vec // bs, 1, 1), stream=stream)
     except Exception:
         mempool.free(out_gpu, M * N * 4)
         return None
