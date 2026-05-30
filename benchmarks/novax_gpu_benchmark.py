@@ -625,16 +625,22 @@ def run_repeated_inference(
 
     try:
         graph = nx.CUDAGraph()
-        graph.capture(nx_inf)
-        for _ in range(warmup):
+        captured_passes = passes if hasattr(graph, "capture_many") else 1
+        if captured_passes > 1:
+            graph.capture_many(nx_inf, captured_passes)
+        else:
+            graph.capture(nx_inf)
+        graph_warmup = 1 if captured_passes > 1 else warmup
+        for _ in range(graph_warmup):
             graph.replay()
         sync_novax(cuda)
         t0 = time.perf_counter()
-        for _ in range(passes):
+        replay_count = max(1, passes // captured_passes)
+        for _ in range(replay_count):
             graph.replay()
         sync_novax(cuda)
         nx_cap_total = (time.perf_counter() - t0) * 1000.0
-        nx_ms = nx_cap_total / passes
+        nx_ms = nx_cap_total / (replay_count * captured_passes)
 
         pt_record = next((r for r in records if r["id"] == f"inference_eager_{passes}_passes"), None)
         pt_ms = pt_record["torch_ms"] if pt_record else math.nan
