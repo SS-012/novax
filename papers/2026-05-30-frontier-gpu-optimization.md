@@ -232,6 +232,11 @@ Experiment note:
   improvements and six regressions, led by a large `fusion_chain3` regression.
   This reinforces the KernelFoundry lesson: even narrow compiler hints need to
   live inside a measured variant search, not as standalone edits.
+- `33d34bc` added `__restrict__` pointer qualifiers only to the exact 64x64
+  matmul kernel. Correctness passed, but there were zero focused improvements
+  and six focused regressions. This strengthens the same conclusion as
+  `5166464`: shallow compiler hints on the kept exact64 kernel are not the
+  current path to a durable win.
 - `2211a84` added an exact zero-bias `128x256x128` fused matmul+ReLU kernel
   with no boundary checks, no bias load, and no runtime shape arguments. It
   repeatedly improved both 128 fused-mm rows, but failed the focused gate twice
@@ -450,6 +455,8 @@ Experiment note:
   evidence; it regressed the target 64x64 matmul row.
 - Adding static launch-bounds hints to exact64 matmul without a measured
   variant search; it produced no focused improvements.
+- Adding exact64 pointer qualifiers as a standalone compiler hint; it produced
+  no focused improvements.
 - Exact repeated-inference rectangular cuBLAS routing in the current Python
   launcher form; it improved captured inference once but regressed seven
   focused rows, including square matmul.
