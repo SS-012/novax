@@ -695,28 +695,48 @@ def _launch_matmul_exact64(a, b, M: int, K: int, N: int):
     __global__ void matmul_exact64_kernel(const float* A, const float* B, float* C) {
         __shared__ float As[16][16];
         __shared__ float Bs[16][16];
-        int row = blockIdx.y * 16 + threadIdx.y;
-        int col = blockIdx.x * 16 + threadIdx.x;
-        float acc = 0.0f;
+        int tx = threadIdx.x;
+        int ty = threadIdx.y;
+        int tid = ty * 16 + tx;
+        int row0 = blockIdx.y * 16 + ty * 2;
+        int row1 = row0 + 1;
+        int col = blockIdx.x * 16 + tx;
+        float acc0 = 0.0f;
+        float acc1 = 0.0f;
         #pragma unroll
         for (int t = 0; t < 4; t++) {
-            As[threadIdx.y][threadIdx.x] = A[row * 64 + t * 16 + threadIdx.x];
-            Bs[threadIdx.y][threadIdx.x] = B[(t * 16 + threadIdx.y) * 64 + col];
+            int k_base = t * 16;
+            As[ty * 2][tx] = A[row0 * 64 + k_base + tx];
+            As[ty * 2 + 1][tx] = A[row1 * 64 + k_base + tx];
+
+            int b0 = tid;
+            int bk0 = b0 >> 4;
+            int bc0 = b0 & 15;
+            Bs[bk0][bc0] = B[(k_base + bk0) * 64 + blockIdx.x * 16 + bc0];
+
+            int b1 = tid + 128;
+            int bk1 = b1 >> 4;
+            int bc1 = b1 & 15;
+            Bs[bk1][bc1] = B[(k_base + bk1) * 64 + blockIdx.x * 16 + bc1];
+
             __syncthreads();
             #pragma unroll
             for (int k = 0; k < 16; k++) {
-                acc += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+                float bval = Bs[k][tx];
+                acc0 += As[ty * 2][k] * bval;
+                acc1 += As[ty * 2 + 1][k] * bval;
             }
             __syncthreads();
         }
-        C[row * 64 + col] = acc;
+        C[row0 * 64 + col] = acc0;
+        C[row1 * 64 + col] = acc1;
     }
     """
     func = get_kernel("matmul_exact64_kernel", kernel_src)
     out_gpu = mempool.alloc(64 * 64 * 4)
     stream = _get_stream()
     func(a.gpu_ptr, b.gpu_ptr, out_gpu,
-         block=(16, 16, 1), grid=(4, 4, 1), stream=stream)
+         block=(16, 8, 1), grid=(4, 4, 1), stream=stream)
 
     Tensor = _get_tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[a, b])
