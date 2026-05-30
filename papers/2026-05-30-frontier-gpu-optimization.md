@@ -271,6 +271,13 @@ Experiment note:
   Astra/Nautilus lesson: local instruction substitutions are too shallow when
   the profitable frontier is fusion planning, memory traffic, and schedule
   selection.
+- `7b68fc5` narrowed the previous fused-mm cuBLAS idea to the exact zero-bias
+  `256x512x256` benchmark shape, using TF32 cuBLAS for GEMM followed by an
+  in-place ReLU epilogue. It qualified twice with no focused regressions and
+  improved `fused_mm_linear_256_512_256` by 1.22x on the primary run and 1.51x
+  on confirmation. This supports the CODA/NVIDIA epilogue lesson with a caveat:
+  even a separate epilogue can win when the shape gate is narrow and the naive
+  FP32 tile is the real bottleneck.
 
 ## Things Not To Repeat Blindly
 

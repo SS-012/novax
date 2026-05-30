@@ -5,12 +5,12 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 83
+- Logged rows: 84
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 82
-- Unique non-baseline experiment commits: 81
-- Currently successful unique experiments: 16
-- Strict benchmark-qualified performance successes: 3
+- Experiment evaluations after baseline: 83
+- Unique non-baseline experiment commits: 82
+- Currently successful unique experiments: 17
+- Strict benchmark-qualified performance successes: 4
 - Currently discarded or reverted unique experiments: 65
 
 Definitions:
@@ -35,10 +35,10 @@ The current best benchmark artifact is `autoresearch/best.json`.
 - Focused NovaX wins vs PyTorch: 11
 - Focused NovaX ties vs PyTorch: 0
 - Focused PyTorch wins vs NovaX: 0
-- Focused geomean NovaX/PyTorch time: 0.577784
-- Overall geomean NovaX/PyTorch time: 1.016206
+- Focused geomean NovaX/PyTorch time: 0.585296
+- Overall geomean NovaX/PyTorch time: 1.027775
 - Best NovaX case vs PyTorch: `inference_capture_300_passes`
-- Best ratio: 0.181595
+- Best ratio: 0.240083
 
 The field names in the benchmark summary are historical: `pytorch_wins` is
 used as the count of NovaX wins in the current output.
@@ -255,6 +255,15 @@ CUDA `fmaf(a, b, c)`, targeting `fusion_chain3_n1000000` and
 `fusion_chain5_n1000000` regressing to 1.44x the saved baseline time. NVCC's
 default multiply-add contraction is likely already good enough here; explicit
 intrinsics do not substitute for dataflow-level fusion planning.
+Experiment `7b68fc5` specialized the exact zero-bias
+`256x512x256` fused matmul+bias+ReLU benchmark shape. It routes the GEMM
+through TF32 cuBLAS and applies an in-place ReLU epilogue, while leaving the
+128 fused-mm shape on the existing one-kernel CUDA path. The primary benchmark
+qualified with score `430.255136`, 3 focused improvements, and 0 focused
+regressions; the confirmation benchmark also qualified with score `882.410648`,
+again with 3 focused improvements and 0 focused regressions. The best repeated
+win was `fused_mm_linear_256_512_256`, which improved by 1.22x on the primary
+run and 1.51x on confirmation.
 
 ## Successful Experiments Kept
 
@@ -276,6 +285,7 @@ intrinsics do not substitute for dataflow-level fusion planning.
 | `03783d5` | keep-bugfix | no | Hold CUDA graph capture outputs until capture ends; fixes capture-time PyCUDA cleanup instability. |
 | `0c8c0ac` | keep | yes | Enable TF32 tensor math for square cuBLAS matmul; qualified twice with large focused matmul wins. |
 | `d610a5c` | keep | yes | Specialize exact 64x64 matmul; qualified twice and made all focused cases faster than PyTorch on confirmation. |
+| `7b68fc5` | keep | yes | Route exact zero-bias 256 fused-mm through TF32 cuBLAS plus in-place ReLU; qualified twice with no focused regressions. |
 
 ## Reverted Or Discarded Findings
 
@@ -436,6 +446,7 @@ These experiments should not be retried in the same form.
 | `5eb4d27` | discard | no | 2 | 2 | 0 | -141.997612 | 0.612282 | Smaller blocks for fused transcendental kernels failed twice and regressed fusion-chain guardrails. |
 | `54cd5f4` | discard | no | 3 | 3 | 0 | -1372.581309 | 0.642395 | Row-coarsened exact 64x64 matmul regressed the target small-matmul path and failed the focused gate. |
 | `e5e58ed` | discard | no | 1 | 6 | 0 | -1254.545042 | 0.602699 | Fused multiply-add expression lowering failed the focused gate and regressed `fusion_chain5`. |
+| `7b68fc5` | keep | yes | 3 | 0 | 0 | 430.255136 | 0.584482 | Exact zero-bias 256 fused-mm route through TF32 cuBLAS qualified twice with no focused regressions. |
 
 ## Future Research Directions
 
