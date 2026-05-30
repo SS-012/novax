@@ -27,6 +27,9 @@ elementwise or activation case. Keep those cases as guardrails.
 | [FlashInfer: Efficient and Customizable Attention Engine for LLM Inference Serving](https://arxiv.org/abs/2501.01005) | High-performance serving combines JIT-specialized templates, memory-layout choices, load-balanced scheduling, and compatibility with CUDA Graph static requirements. | NovaX should make graph-captured static workloads first-class: fixed-shape graph keys, capture-safe memory reuse, and explicit replay APIs. |
 | [KernelBench: Can LLMs Write Efficient GPU Kernels?](https://arxiv.org/abs/2502.10517) | LLM-generated kernels need correctness checks, execution feedback, and profiling feedback. Even frontier methods match PyTorch in fewer than 20 percent of cases without strong iteration. | Autoresearch should not trust plausible kernel edits. Every hypothesis needs tests, benchmark comparison, and preferably profiling evidence. |
 | [AutoKernel: Autonomous GPU Kernel Optimization via Iterative Agent-Driven Search](https://arxiv.org/abs/2603.21331) | A 2026 autonomous kernel loop profiles a model, ranks bottlenecks by Amdahl impact, then validates candidates through smoke tests, shape sweeps, numerical checks, determinism checks, and edge cases before recording speedups. | NovaX's loop should keep the current correctness-plus-benchmark gate, but add bottleneck ranking/profiling notes so experiments attack the cases that dominate focused geomean. |
+| [CudaForge: An Agent Framework with Hardware Feedback for CUDA Kernel Optimization](https://arxiv.org/abs/2511.01884) | The agent loop explicitly combines candidate generation, correctness checks, hardware feedback such as Nsight Compute metrics, and repeated improvement. | NovaX should start attaching profiler counters to repeated failures around fused-mm and exact small GEMM; static edits are not enough once the target is near the noise floor. |
+| [CUDA Agent: Large-Scale Agentic RL for High-Performance CUDA Kernel Generation](https://arxiv.org/abs/2602.24286) | The frontier is moving toward learned CUDA optimization skill with reliable verification and profiling rewards, not one-off prompt guesses. | Keep the autoresearch loop strict: correctness, focused latency, and regression guardrails should define reward. Longer-term, collect failed variants as training/search data. |
+| [Astra: A Multi-Agent System for GPU Kernel Performance Optimization](https://arxiv.org/abs/2509.07506) | Starting from existing CUDA kernels and iteratively applying loop transformations, memory-access changes, intrinsics, and fast math is a viable optimization workflow. | NovaX experiments should mutate the existing hot CUDA strings in small verifiable steps, but only keep transformations that survive full focused-suite validation. |
 | [KernelAgent: Hardware-Guided GPU Kernel Optimization via Multi-Agent Orchestration](https://pytorch.org/blog/kernelagent-hardware-guided-gpu-kernel-optimization-via-multi-agent-orchestration/) | PyTorch's 2026 hardware-guided loop emphasizes profiler-derived bottleneck diagnosis before proposing kernel changes. | NovaX should increasingly attach profiling notes to experiments; pure Python launch-source caching can look plausible but still sit below benchmark noise. |
 | [TileLang: A Composable Tiled Programming Model for AI Systems](https://arxiv.org/abs/2504.17577) | Separating dataflow from scheduling gives a usable way to express tiled kernels while leaving thread binding, layout, tensorization, and pipelining tunable. | A future NovaX backend could generate TileLang/Triton-like kernels from focused graph patterns instead of hand-authoring each CUDA kernel. |
 | [CUDA-LLM: LLMs Can Write Efficient CUDA Kernels](https://arxiv.org/abs/2506.09092) | Automated CUDA generation works better when correctness, compile success, and measured latency are jointly optimized through feedback. | Treat NovaX autoresearch as a feedback loop: generate one small kernel idea, run correctness, benchmark focused cases, log result, then revise. |
@@ -256,6 +259,12 @@ Experiment note:
   blocks. It failed twice and regressed fusion-chain guardrails. This supports
   the TritonForge/KernelAgent lesson: block-size scheduling should be driven by
   profiler counters or an explicit autotune sweep, not a static guess.
+- `54cd5f4` row-coarsened the exact 64x64 matmul kernel from 256 threads per
+  block to 128 threads per block with each thread producing two output rows.
+  Correctness passed, but the target `matmul_64x64_x_64x64` regressed by 1.62x
+  versus the saved baseline. This supports the CudaForge/CUDA Agent lesson:
+  shape-specific small-GEMM variants need profiler feedback or autotuned search,
+  because plausible occupancy reductions can lose to the simpler kept tile.
 
 ## Things Not To Repeat Blindly
 
@@ -280,3 +289,5 @@ Experiment note:
   qualification.
 - Static fused-transcendental block-size changes without profiler evidence or
   an autotune sweep.
+- Row-coarsened exact 64x64 matmul unless profiler counters show the kept
+  16x16 one-output-per-thread tile is occupancy- or synchronization-limited.
