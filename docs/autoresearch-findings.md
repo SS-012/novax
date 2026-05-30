@@ -5,12 +5,12 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 71
+- Logged rows: 72
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 70
-- Unique non-baseline experiment commits: 69
-- Currently successful unique experiments: 14
-- Strict benchmark-qualified performance successes: 1
+- Experiment evaluations after baseline: 71
+- Unique non-baseline experiment commits: 70
+- Currently successful unique experiments: 15
+- Strict benchmark-qualified performance successes: 2
 - Currently discarded or reverted unique experiments: 55
 
 Definitions:
@@ -31,12 +31,14 @@ The current best benchmark artifact is `autoresearch/best.json`.
 - Benchmark cases ok: 35
 - Benchmark errors: 0
 - Benchmark skipped: 0
-- NovaX wins vs PyTorch: 10
-- NovaX ties vs PyTorch: 3
-- PyTorch wins vs NovaX: 22
-- Geomean NovaX/PyTorch time: 1.046350
+- Focused differentiated cases: 11
+- Focused NovaX wins vs PyTorch: 10
+- Focused NovaX ties vs PyTorch: 0
+- Focused PyTorch wins vs NovaX: 1
+- Focused geomean NovaX/PyTorch time: 0.622541
+- Overall geomean NovaX/PyTorch time: 1.028264
 - Best NovaX case vs PyTorch: `inference_capture_300_passes`
-- Best ratio: 0.170820
+- Best ratio: 0.187764
 
 The field names in the benchmark summary are historical: `pytorch_wins` is
 used as the count of NovaX wins in the current output.
@@ -71,6 +73,10 @@ into the reduction pass (`c6b9ebf`), and atomic large-sum reductions
 cuBLAS helps, but only under constrained shapes. Medium and square GEMM work
 was useful (`c51cbe5`, `c8de115`, `2f91cb8`), while rectangular/generalized
 cuBLAS attempts regressed MLP forward, inference, or reductions.
+The strongest square-GEMM follow-up is `0c8c0ac`, which enables TF32 tensor
+math only for the already square-gated cuBLAS path at 256x256 and larger. It
+qualified twice and produced large focused matmul wins without touching the
+small 128x128 precision test path.
 
 Reduction tuning is sensitive. Some reduction changes helped (`268b4f3`,
 `8b832f8`, `290e511`), but many block-size, grid-cap, and warp-shuffle variants
@@ -168,6 +174,12 @@ expressions, targeting `fusion_chain5_n1000000`. The first run improved that
 target by about 1.03x but failed the focused gate; the confirmation run failed
 again and the fusion chain itself regressed. Approximate exponentials are not a
 durable focused-fusion win in this form.
+Experiment `0c8c0ac` enabled `CUBLAS_TF32_TENSOR_OP_MATH` for square cuBLAS
+matmul at 256x256 and larger. It qualified on both the primary run and a
+confirmation run. The primary run improved six focused cases, with the largest
+wins on `matmul_512x512_x_512x512` (1.59x), `matmul_1024x1024_x_1024x1024`
+(1.52x), and `matmul_256x256_x_256x256` (1.23x). This is the first strict
+qualified kept performance win since CUDA graph replay.
 
 ## Successful Experiments Kept
 
@@ -187,6 +199,7 @@ durable focused-fusion win in this form.
 | `290e511` | keep | no | Float4 large sum reduction improves large reductions despite noisy unrelated regressions. |
 | `8abede0` | keep | yes | Expose CUDA graph replay; captured inference becomes benchmarked and faster than PyTorch. |
 | `03783d5` | keep-bugfix | no | Hold CUDA graph capture outputs until capture ends; fixes capture-time PyCUDA cleanup instability. |
+| `0c8c0ac` | keep | yes | Enable TF32 tensor math for square cuBLAS matmul; qualified twice with large focused matmul wins. |
 
 ## Reverted Or Discarded Findings
 
@@ -325,6 +338,7 @@ These experiments should not be retried in the same form.
 | `c5e8268` | discard | no | 0 | 8 | 0 | -3943.210591 | 0.728258 | Rectangular 16x32 fused matmul tile failed to improve focused baseline and regressed fused-mm and matmul cases. |
 | `5626de1` | discard | no | 1 | 4 | 0 | -666.673293 | 0.677285 | Repeated inference graph capture improved captured inference twice but failed focused regression gate on both runs. |
 | `a8d9886` | discard | no | 1 | 4 | 0 | -1549.618580 | 0.666400 | Fast __expf for fused sigmoid chains improved fusion_chain5 once but failed confirmation and focused regression gate. |
+| `0c8c0ac` | keep | yes | 6 | 2 | 0 | 661.399441 | 0.622541 | Enabled TF32 tensor math for square cuBLAS matmul and qualified twice with large focused matmul wins. |
 
 ## Future Research Directions
 
