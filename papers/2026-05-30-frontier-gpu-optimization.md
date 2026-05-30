@@ -36,6 +36,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [CODA: Rewriting Transformer Blocks as GEMM-Epilogue Programs](https://arxiv.org/abs/2605.19269) | A 2026 result argues that many memory-bound transformer side operations should execute as composable GEMM epilogues while GEMM output tiles are still on chip. | NovaX's fused-mm path should move toward true GEMM-epilogue fusion, not GEMM followed by a separate epilogue kernel. |
 | [Dissecting the NVIDIA Blackwell Architecture with Microbenchmarks](https://arxiv.org/abs/2507.10789) | Blackwell exposes major performance through newer Tensor Core paths and memory hierarchy behavior; kernel choices must map to those hardware units. | For square GEMM, NovaX should prefer vendor Tensor Core math modes over hand-written FP32 CUDA tiles when accuracy policy allows it. |
 | [Microbenchmark-Driven Analytical Performance Modeling Across Modern GPU Architectures](https://arxiv.org/abs/2605.04178) | Modern GPU performance work benefits from microbenchmark-grounded models of Tensor Cores and memory hierarchy rather than generic rules of thumb. | When NovaX sees a shape-stable GEMM case, first test hardware-backed library modes and shape gates before writing another kernel. |
+| [Evaluating CUDA Tile for AI Workloads on Hopper and Blackwell GPUs](https://arxiv.org/abs/2604.23466) | Modern tile-centric APIs try to expose Tensor Core and TMA efficiency through a higher-level programming model, but performance still depends on mapping the tile schedule to the workload. | NovaX fusion work should move toward explicit tile/schedule choices; adding low-level qualifiers to the existing scalar-per-element kernel is too shallow. |
 | [Nautilus: An Auto-Scheduling Tensor Compiler for Efficient Tiled GPU Kernels](https://arxiv.org/abs/2604.14825) | A 2026 tensor compiler result shows that expression rewrites, high-level transformations, and tile optimizations need to be searched jointly rather than hand-applied one at a time. | NovaX's next meaningful gains likely need a small IR plus scheduler/autotuner; isolated hand-specialized kernels have repeatedly failed the focused gate. |
 | [GPUOS: A GPU Operating System Primitive for Transparent Operation Fusion](https://arxiv.org/abs/2604.17861) | A 2026 runtime direction for many small tensor ops is to avoid repeated host launches by using persistent GPU-side operation injection. | NovaX's Python overhead ceiling likely needs either larger graph capture regions or a lower-level runtime loop; individual Python-call optimizations are not enough. |
 | [Hybrid JIT-CUDA Graph Optimization for Low-Latency Large Language Model Inference](https://arxiv.org/abs/2604.23467) | High-performance low-latency inference partitions static work into CUDA Graph replay and dynamic work into JIT-compiled kernels, reducing launch overhead and latency variance. | NovaX should keep pushing static graph replay, but pure Python replay loops are unlikely to be enough; the replay loop needs to move lower than Python or be amortized by larger captured regions. |
@@ -194,6 +195,11 @@ Experiment note:
   chain itself regressing. This supports the OptiML lesson: approximate math
   edits must be treated as verified search candidates rather than obvious
   optimizations.
+- `dfe4345` added `__restrict__` pointer qualifiers to generic fused
+  elementwise kernels. It produced no focused improvements and regressed
+  fused-mm cases. This supports the CUDA Tile/Nautilus lesson: NovaX needs
+  explicit scheduling or tile-level changes for fusion, not shallow compiler
+  hinting on the same scalar kernel shape.
 
 ## Things Not To Repeat Blindly
 
@@ -204,6 +210,7 @@ Experiment note:
 - Static fused-mm tile changes without profiling or an autotune search.
 - GEMM plus a separate epilogue launch as a substitute for true epilogue fusion.
 - Fast-math substitutions without repeatable target-case wins.
+- Pointer qualifier or signature-only fused-kernel tweaks.
 - Softmax fast-math changes that do not improve the softmax benchmark itself.
 - GPU backward rewrites that touch unrelated eager/autograd behavior.
 - CUDA graph replay micro-tweaks unless captured inference itself improves.

@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 73
+- Logged rows: 74
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 72
-- Unique non-baseline experiment commits: 71
+- Experiment evaluations after baseline: 73
+- Unique non-baseline experiment commits: 72
 - Currently successful unique experiments: 15
 - Strict benchmark-qualified performance successes: 2
-- Currently discarded or reverted unique experiments: 56
+- Currently discarded or reverted unique experiments: 57
 
 Definitions:
 
@@ -185,6 +185,10 @@ TF32 cuBLAS and an in-place bias+ReLU epilogue. It reliably improved the larger
 fused-mm target, including a 1.38x `fused_mm_linear_256_512_256` win, but it
 qualified only once across three benchmark runs. Because two runs exceeded the
 focused regression budget, it was reverted.
+Experiment `dfe4345` added `__restrict__` qualifiers to generic fused
+elementwise kernel pointers. It produced no focused improvements and regressed
+two focused fused-mm cases versus the new TF32 baseline. Alias-hint-only fusion
+changes are not enough for the current focused suite.
 
 ## Successful Experiments Kept
 
@@ -268,6 +272,7 @@ These experiments should not be retried in the same form.
 | `5626de1` | discard | Capturing all repeated inference passes into one graph improved capture twice but failed the focused regression gate twice. |
 | `a8d9886` | discard | Fast `__expf` in fused sigmoid chains improved `fusion_chain5` once but failed confirmation and the focused gate. |
 | `9f22443` | discard | TF32 cuBLAS plus in-place epilogue improved large fused-mm targets but qualified only once across three runs. |
+| `dfe4345` | discard | `__restrict__` fused-kernel pointer hints produced no focused improvements and regressed fused-mm cases. |
 
 ## Full Experiment Ledger
 
@@ -346,6 +351,7 @@ These experiments should not be retried in the same form.
 | `a8d9886` | discard | no | 1 | 4 | 0 | -1549.618580 | 0.666400 | Fast __expf for fused sigmoid chains improved fusion_chain5 once but failed confirmation and focused regression gate. |
 | `0c8c0ac` | keep | yes | 6 | 2 | 0 | 661.399441 | 0.622541 | Enabled TF32 tensor math for square cuBLAS matmul and qualified twice with large focused matmul wins. |
 | `9f22443` | discard | no | 4 | 3 | 0 | 171.899694 | 0.610088 | Large fused-mm through TF32 cuBLAS improved target cases but qualified only once across three runs. |
+| `dfe4345` | discard | no | 0 | 2 | 0 | -555.194185 | 0.611843 | Restrict qualifiers on fused elementwise kernels produced no focused improvements and regressed fused-mm cases. |
 
 ## Future Research Directions
 
