@@ -727,7 +727,9 @@ def _launch_matmul_exact64(a, b, M: int, K: int, N: int):
 
 
 def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
-    if M != K or K != N or M < 128:
+    square_gemm = M == K and K == N and M >= 128
+    inference_rect_gemm = (M, K, N) in ((64, 128, 256), (64, 256, 128))
+    if not (square_gemm or inference_rect_gemm):
         return None
     lib, handle = _get_cublas()
     if lib is None or handle is None:
@@ -737,7 +739,7 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
     alpha = ctypes.c_float(1.0)
     beta = ctypes.c_float(0.0)
     _set_cublas_stream(lib, handle)
-    math_mode = _CUBLAS_TF32_TENSOR_OP_MATH if M >= 256 else _CUBLAS_DEFAULT_MATH
+    math_mode = _CUBLAS_TF32_TENSOR_OP_MATH if M >= 256 or inference_rect_gemm else _CUBLAS_DEFAULT_MATH
     _set_cublas_math_mode(lib, handle, math_mode)
     try:
         status = lib.cublasSgemm_v2(

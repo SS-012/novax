@@ -401,6 +401,17 @@ class TestGPUNewOps:
         expected = np.maximum(x_arr @ w_arr, 0.0)
         np.testing.assert_allclose(result, expected, rtol=0.08, atol=0.2)
 
+    def test_gpu_inference_rectangular_cublas_shapes(self):
+        rng = np.random.default_rng(790)
+        nx.set_default_device("gpu")
+        for m, k, n in ((64, 128, 256), (64, 256, 128)):
+            x_arr = rng.standard_normal((m, k), dtype=np.float32)
+            w_arr = (rng.standard_normal((k, n), dtype=np.float32) * 0.02).astype(np.float32)
+            x = Tensor(x_arr).to_gpu()
+            w = Tensor(w_arr).to_gpu()
+            result = nx.matmul(x, w).to_host()
+            np.testing.assert_allclose(result, x_arr @ w_arr, rtol=0.03, atol=0.02)
+
     def test_gpu_lazy_nested_elementwise_chain(self):
         a_arr = np.linspace(-2.0, 2.0, 64, dtype=np.float32)
         b_arr = a_arr * 0.5
