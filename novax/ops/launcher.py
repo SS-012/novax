@@ -772,7 +772,7 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
 
 
 def _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M: int, K: int, N: int):
-    if (M, K, N) not in ((128, 256, 128), (256, 512, 256)):
+    if (M, K, N) != (256, 512, 256):
         return None
     if not getattr(bias, "_is_all_zero", False):
         return None
