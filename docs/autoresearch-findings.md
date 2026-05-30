@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 75
+- Logged rows: 76
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 74
-- Unique non-baseline experiment commits: 73
+- Experiment evaluations after baseline: 75
+- Unique non-baseline experiment commits: 74
 - Currently successful unique experiments: 15
 - Strict benchmark-qualified performance successes: 2
-- Currently discarded or reverted unique experiments: 58
+- Currently discarded or reverted unique experiments: 59
 
 Definitions:
 
@@ -194,6 +194,14 @@ zero-bias fused matmul+ReLU kernel that skipped `B[col]` loads/adds. The
 benchmark bias tensors are zero, but the change produced no focused
 improvements and regressed five focused cases. Bias-load removal is not the
 current fused-mm bottleneck.
+Experiment `4a31903` retested direct fused-expression building under the new
+focused metric, falling back to constant folding only when direct lowering
+failed. It improved `fusion_chain5_n1000000` in both runs, but failed the
+focused gate twice: primary score `-183.428112` with 2 focused improvements and
+2 regressions; confirmation score `-1058.152881` with 1 improvement and 4
+regressions. The likely lesson is that Python-side expression-building savings
+are too small and noisy to keep unless the fusion chain wins survive the whole
+focused suite.
 
 ## Successful Experiments Kept
 
@@ -279,6 +287,7 @@ These experiments should not be retried in the same form.
 | `9f22443` | discard | TF32 cuBLAS plus in-place epilogue improved large fused-mm targets but qualified only once across three runs. |
 | `dfe4345` | discard | `__restrict__` fused-kernel pointer hints produced no focused improvements and regressed fused-mm cases. |
 | `29a37e2` | discard | Zero-bias fused matmul specialization produced no focused improvements and regressed focused cases. |
+| `4a31903` | discard | Direct fused-expression build improved `fusion_chain5` twice but failed the focused gate on both runs. |
 
 ## Full Experiment Ledger
 
@@ -359,6 +368,7 @@ These experiments should not be retried in the same form.
 | `9f22443` | discard | no | 4 | 3 | 0 | 171.899694 | 0.610088 | Large fused-mm through TF32 cuBLAS improved target cases but qualified only once across three runs. |
 | `dfe4345` | discard | no | 0 | 2 | 0 | -555.194185 | 0.611843 | Restrict qualifiers on fused elementwise kernels produced no focused improvements and regressed fused-mm cases. |
 | `29a37e2` | discard | no | 0 | 5 | 0 | -1099.821460 | 0.647448 | Zero-bias fused matmul specialization produced no focused improvements and regressed fusion and fused-mm cases. |
+| `4a31903` | discard | no | 2 | 2 | 0 | -183.428112 | 0.612141 | Direct fused-expression build improved fusion_chain5 twice but failed the focused gate on both runs. |
 
 ## Future Research Directions
 
