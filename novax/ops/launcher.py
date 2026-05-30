@@ -332,7 +332,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     expr = _apply_broadcast_indices(expr, inputs, inputs[0].shape, n)
     assert expr is not None, "All inputs must be broadcastable to the output shape"
 
-    params = ", ".join([f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"])
+    params = ", ".join([f"const float* __restrict__ x{i}" for i in range(len(inputs))] + ["float* __restrict__ out", "int n"])
     kernel_src = f"""
     __global__ void {op_name}({params}) {{
         int idx = threadIdx.x + blockIdx.x * blockDim.x;
