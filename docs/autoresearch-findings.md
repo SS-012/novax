@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 98
+- Logged rows: 99
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 97
-- Unique non-baseline experiment commits: 96
+- Experiment evaluations after baseline: 98
+- Unique non-baseline experiment commits: 97
 - Currently successful unique experiments: 17
 - Strict benchmark-qualified performance successes: 4
-- Currently discarded or reverted unique experiments: 79
+- Currently discarded or reverted unique experiments: 80
 
 Definitions:
 
@@ -468,6 +468,7 @@ These experiments should not be retried in the same form.
 | `2211a84` | discard | Exact 128 zero-bias fused-mm improved target rows but failed confirmation with five focused regressions. |
 | `91b30af` | discard | Skipping same-size fused broadcast rewriting produced no target fused-path win. |
 | `be748f9` | discard | Padding exact64 shared-memory tiles regressed the target 64x64 matmul row. |
+| `61dd33d` | discard | Graph-capture-only rectangular cuBLAS improved captured inference twice, but six focused rows regressed on both runs. |
 
 ## Full Experiment Ledger
 
@@ -571,6 +572,7 @@ These experiments should not be retried in the same form.
 | `2211a84` | discard | no | 3 | 5 | 0 | -448.210483 | 0.553269 | Exact 128 zero-bias fused-mm improved target rows but failed confirmation with five focused regressions. |
 | `91b30af` | discard | no | 2 | 3 | 0 | -695.614080 | 0.595810 | Skipping same-size fused broadcast rewriting produced no target fused-path win. |
 | `be748f9` | discard | no | 2 | 4 | 0 | -1718.634380 | 0.607973 | Padding exact64 shared-memory tiles regressed the target 64x64 matmul row. |
+| `61dd33d` | discard | no | 2 | 6 | 0 | -1432.187241 | 0.597734 | Graph-capture-only rectangular cuBLAS improved captured inference twice but failed the focused regression gate. |
 
 ## Future Research Directions
 

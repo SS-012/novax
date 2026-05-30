@@ -28,6 +28,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [PyGraph: Robust Compiler Support for CUDA Graphs in PyTorch](https://arxiv.org/abs/2503.19779) | CUDA Graph gains become robust when capture is integrated into the compiler/runtime rather than exposed only as manual user code. | NovaX should treat graph capture as a runtime lowering path with shape keys, stable allocation, and compiler-like guards, not just a convenience wrapper. |
 | [KernelBench: Can LLMs Write Efficient GPU Kernels?](https://arxiv.org/abs/2502.10517) | LLM-generated kernels need correctness checks, execution feedback, and profiling feedback. Even frontier methods match PyTorch in fewer than 20 percent of cases without strong iteration. | Autoresearch should not trust plausible kernel edits. Every hypothesis needs tests, benchmark comparison, and preferably profiling evidence. |
 | [AutoKernel: Autonomous GPU Kernel Optimization via Iterative Agent-Driven Search](https://arxiv.org/abs/2603.21331) | A 2026 autonomous kernel loop profiles a model, ranks bottlenecks by Amdahl impact, then validates candidates through smoke tests, shape sweeps, numerical checks, determinism checks, and edge cases before recording speedups. | NovaX's loop should keep the current correctness-plus-benchmark gate, but add bottleneck ranking/profiling notes so experiments attack the cases that dominate focused geomean. |
+| [KernelFoundry: Hardware-aware evolutionary GPU kernel optimization](https://arxiv.org/abs/2603.12440) | Hardware-aware evolutionary search keeps diverse kernel strategies alive while tuning templates against real measurements. | NovaX needs a small candidate-family search for fused-mm and graph/static GEMM paths; hand-picking one plausible variant is too fragile. |
 | [CudaForge: An Agent Framework with Hardware Feedback for CUDA Kernel Optimization](https://arxiv.org/abs/2511.01884) | The agent loop explicitly combines candidate generation, correctness checks, hardware feedback such as Nsight Compute metrics, and repeated improvement. | NovaX should start attaching profiler counters to repeated failures around fused-mm and exact small GEMM; static edits are not enough once the target is near the noise floor. |
 | [CUDA Agent: Large-Scale Agentic RL for High-Performance CUDA Kernel Generation](https://arxiv.org/abs/2602.24286) | The frontier is moving toward learned CUDA optimization skill with reliable verification and profiling rewards, not one-off prompt guesses. | Keep the autoresearch loop strict: correctness, focused latency, and regression guardrails should define reward. Longer-term, collect failed variants as training/search data. |
 | [KernelBlaster: Continual Cross-Task CUDA Optimization via Memory-Augmented In-Context Reinforcement Learning](https://arxiv.org/abs/2602.14293) | A 2026 agentic CUDA optimizer stores prior optimization attempts in a persistent knowledge base and uses them to guide future edits. | NovaX should treat `autoresearch/results.tsv`, benchmark artifacts, and this paper log as memory: each failure should constrain the next search rather than being rediscovered. |
@@ -41,6 +42,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [ParallelKittens: Systematic and Practical Simplification of Multi-GPU AI Kernels](https://arxiv.org/abs/2511.13940) | Multi-GPU performance depends heavily on overlapping communication, scheduling, and data-transfer primitives. | Not an immediate single-GPU benchmark target, but relevant if NovaX expands beyond one GPU. |
 | [CUDA-L2: Surpassing cuBLAS Performance for Matrix Multiplication through Reinforcement Learning](https://arxiv.org/abs/2512.02551) | The strongest matmul results come from automated search across a large kernel configuration space with measured execution speed as the reward. | NovaX should not expect static hand tweaks to beat cuBLAS/PyTorch broadly; serious matmul wins need a shape-keyed autotuning loop or vendor-library plan cache. |
 | [tritonBLAS: Triton-based Analytical Approach for GEMM Kernel Parameter Selection](https://arxiv.org/abs/2512.04226) | Analytical models can predict near-optimal GEMM tiling from hardware/cache/shape parameters without paying full empirical autotuning cost. | For NovaX fused-mm, use shape-keyed analytical defaults before brute-force search; the 128 and 256 benchmark shapes likely need different tile/epilogue tactics. |
+| [TLX: Hardware-Native, Evolvable MIMW GPU Compiler for Large-scale Production Environments](https://arxiv.org/abs/2605.10905) | A May 2026 Triton extension exposes warp-group orchestration, local-memory movement, asynchronous operations, and cluster-aware control for production kernels. | NovaX's Python/PyCUDA layer can choose the workload, but serious fused GEMM and graph regions need lower-level orchestration than scalar CUDA strings. |
 | [FalconGEMM: Surpassing Hardware Peaks with Lower-Complexity Matrix Multiplication](https://arxiv.org/abs/2605.06057) | A 2026 GEMM framework combines code generation, group-parallel optimizations, and an analytical decision model to choose strategies by shape and hardware. | NovaX small-GEMM and fused-mm work should move toward generated candidate families with shape selection; one-off direct/shared-memory edits are too brittle. |
 | [GEMM-GS: Accelerating 3D Gaussian Splatting on Tensor Cores with GEMM-Compatible Blending](https://arxiv.org/abs/2604.02120) | A non-GEMM workload is reformulated into GEMM-compatible tiles to use Tensor Cores, with a staged pipeline overlapping memory and computation. | NovaX should prefer transformations that move work toward Tensor Core/vendor-friendly GEMM paths over local shared-memory tweaks when arithmetic intensity is high. |
 | [A Few Fit Most: Improving Performance Portability of SGEMM on GPUs using Multi-Versioning](https://arxiv.org/abs/2507.15277) | A single GEMM kernel rarely stays near-optimal across devices and shapes; a small set of generated variants can be more portable than one universal kernel. | NovaX fused-mm should move toward a shape-keyed kernel family, but variants need measured selection. A hand-picked exact-tile version without profiling is still just a static guess. |
@@ -98,6 +100,13 @@ Experiment note:
   it is that library-state or math-mode changes must be isolated and validated
   against square matmul/fused-mm guardrails, or moved behind a lower-level
   graph/runtime plan.
+- `61dd33d` isolated those same rectangular cuBLAS routes to
+  `CUDAGraph.capture()` only, so eager matmul should not have been touched.
+  Captured inference improved twice, by about 1.29x and 1.16x versus the saved
+  best, but six focused rows regressed on both runs and the gate failed. This
+  supports the TLX/KernelFoundry lesson: graph-path GEMM routing needs a real
+  plan/search boundary and a less noisy execution layer, not another Python
+  flag around the same cuBLAS calls.
 
 ### H2: Primitive graph lowering for fusion
 
@@ -437,6 +446,9 @@ Experiment note:
 - Exact repeated-inference rectangular cuBLAS routing in the current Python
   launcher form; it improved captured inference once but regressed seven
   focused rows, including square matmul.
+- Graph-capture-only rectangular cuBLAS routing through a Python launcher flag;
+  it improved captured inference twice but still failed the focused regression
+  gate.
 - Exact zero-bias `128x256x128` fused-mm through another static 16x16 SIMT
   tile; it improved target rows but still failed focused confirmation.
 - Same-size fused broadcast-rewrite skipping as a standalone Python-side
