@@ -186,6 +186,12 @@ Experiment note:
   focused score stayed negative. A one-warp-per-16x16 WMMA tile is not enough;
   a real generated path needs multi-warp tiles, shared-memory staging,
   epilogue scheduling, and autotuned variants.
+- `552c315` routed square matmul through `cublasGemmEx` with
+  `CUBLAS_COMPUTE_32F_FAST_TF32`. The API worked, but it produced no
+  saved-best focused improvements and regressed seven focused rows. For this
+  benchmark, the existing legacy `cublasSgemm_v2` plus TF32 math mode remains
+  the better vendor path; future square-GEMM work needs plan/autotune evidence
+  before replacing it.
 
 ### H4: GPU-resident MLP backward, gated narrowly
 
@@ -384,3 +390,5 @@ Experiment note:
   persistent lower-level plan cache or generated kernel.
 - One-warp-per-output-tile WMMA fused-mm kernels without shared-memory staging,
   multi-warp blocking, or autotuned tile selection.
+- Replacing the kept square TF32 `cublasSgemm_v2` path with `cublasGemmEx`
+  without measured plan selection; the direct swap regressed the focused suite.
