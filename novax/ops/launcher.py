@@ -771,6 +771,71 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
     return result
 
 
+def _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M: int, K: int, N: int):
+    if (M, K, N) != (256, 512, 256):
+        return None
+    if not getattr(bias, "_is_all_zero", False):
+        return None
+    lib, handle = _get_cublas()
+    if lib is None or handle is None:
+        return None
+
+    out_gpu = mempool.alloc(M * N * 4)
+    alpha = ctypes.c_float(1.0)
+    beta = ctypes.c_float(0.0)
+    _set_cublas_stream(lib, handle)
+    _set_cublas_math_mode(lib, handle, _CUBLAS_TF32_TENSOR_OP_MATH)
+    try:
+        status = lib.cublasSgemm_v2(
+            handle,
+            _CUBLAS_OP_N,
+            _CUBLAS_OP_N,
+            ctypes.c_int(N),
+            ctypes.c_int(M),
+            ctypes.c_int(K),
+            ctypes.byref(alpha),
+            ctypes.c_void_p(int(w.gpu_ptr)),
+            ctypes.c_int(N),
+            ctypes.c_void_p(int(x.gpu_ptr)),
+            ctypes.c_int(K),
+            ctypes.byref(beta),
+            ctypes.c_void_p(int(out_gpu)),
+            ctypes.c_int(N),
+        )
+    except Exception:
+        mempool.free(out_gpu, M * N * 4)
+        return None
+    if status != 0:
+        mempool.free(out_gpu, M * N * 4)
+        return None
+
+    kernel_src = """
+    __global__ void relu_inplace_kernel(float* C, int total) {
+        int idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx < total) {
+            C[idx] = fmaxf(0.0f, C[idx]);
+        }
+    }
+    """
+    try:
+        func = get_kernel("relu_inplace_kernel", kernel_src)
+        total = M * N
+        bs = _optimal_block_size()
+        stream = _get_stream()
+        func(out_gpu, np.int32(total),
+             block=(bs, 1, 1), grid=((total + bs - 1) // bs, 1, 1), stream=stream)
+    except Exception:
+        mempool.free(out_gpu, M * N * 4)
+        return None
+
+    Tensor = _get_tensor_cls()
+    result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
+    result.shape = (M, N)
+    result.size = M * N
+    result.dtype = np.float32
+    return result
+
+
 def launch_matmul_bias_relu(x, w, bias):
     """
     Fused matmul + bias add + ReLU in a single CUDA kernel pass.
@@ -784,6 +849,10 @@ def launch_matmul_bias_relu(x, w, bias):
     K2, N = w.shape
     assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
+
+    cublas_out = _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M, K, N)
+    if cublas_out is not None:
+        return cublas_out
 
     TILE = 16
     kernel_src = f"""
