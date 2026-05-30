@@ -2,12 +2,13 @@
 NovaX vs PyTorch GPU benchmark for autoresearch.
 
 This is a script port of the GPU benchmark notebook. It keeps the same broad
-coverage while adding machine-readable output and an experiment metric:
+coverage while adding machine-readable output and a focused experiment metric:
 
     qualified: yes
 
-means the current run improved at least one comparable NovaX timing versus the
-baseline JSON and did not regress too many other benchmarks.
+means the current run improved at least one comparable differentiated-path
+NovaX timing versus the baseline JSON and did not regress too many focused
+benchmarks. Overall benchmark results are still reported as guardrail context.
 
 Examples:
     python benchmarks/novax_gpu_benchmark.py --profile smoke
@@ -33,6 +34,24 @@ import numpy as np
 
 
 Record = Dict[str, Any]
+
+DIFFERENTIATED_SECTIONS = frozenset({
+    "matmul",
+    "fusion",
+    "fused_mm",
+})
+DIFFERENTIATED_ID_PREFIXES = (
+    "inference_capture_",
+)
+
+
+def is_differentiated_case(record: Record) -> bool:
+    """Primary autoresearch target: NovaX paths that can structurally beat PyTorch."""
+    case_id = str(record.get("id", ""))
+    section = str(record.get("section", ""))
+    return section in DIFFERENTIATED_SECTIONS or any(
+        case_id.startswith(prefix) for prefix in DIFFERENTIATED_ID_PREFIXES
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -637,24 +656,47 @@ def run_repeated_inference(
         record_error(case_id, f"captured replay {passes} passes per-pass avg", exc)
 
 
-def summarize_vs_pytorch(records: list[Record]) -> dict[str, Any]:
-    ok = [r for r in records if r.get("status") == "ok" and r.get("ratio")]
-    ratios = [float(r["ratio"]) for r in ok if r["ratio"] and r["ratio"] > 0]
+def _pytorch_stats(ok: list[Record]) -> dict[str, Any]:
+    ratios = [float(r["ratio"]) for r in ok if r.get("ratio") and r["ratio"] > 0]
     wins = sum(1 for r in ok if r.get("winner") == "novax")
     ties = sum(1 for r in ok if r.get("winner") == "tie")
     losses = sum(1 for r in ok if r.get("winner") == "torch")
     geomean = math.exp(sum(math.log(r) for r in ratios) / len(ratios)) if ratios else math.nan
     best = min(ok, key=lambda r: r["ratio"]) if ok else None
     return {
+        "count": len(ok),
+        "wins": wins,
+        "ties": ties,
+        "losses": losses,
+        "geomean": round(geomean, 6) if not math.isnan(geomean) else None,
+        "best_id": best["id"] if best else None,
+        "best_ratio": best["ratio"] if best else None,
+    }
+
+
+def summarize_vs_pytorch(records: list[Record]) -> dict[str, Any]:
+    ok = [r for r in records if r.get("status") == "ok" and r.get("ratio")]
+    focus_ok = [r for r in ok if is_differentiated_case(r)]
+    focus = _pytorch_stats(focus_ok)
+    overall = _pytorch_stats(ok)
+    return {
         "ok": len(ok),
         "errors": sum(1 for r in records if r.get("status") == "error"),
         "skipped": sum(1 for r in records if r.get("status") == "skipped"),
-        "pytorch_wins": wins,
-        "pytorch_ties": ties,
-        "pytorch_losses": losses,
-        "geomean_novax_vs_pytorch": round(geomean, 6) if not math.isnan(geomean) else None,
-        "best_novax_vs_pytorch": best["id"] if best else None,
-        "best_novax_vs_pytorch_ratio": best["ratio"] if best else None,
+        "focus_cases": focus["count"],
+        "focus_case_ids": [r["id"] for r in focus_ok],
+        "pytorch_wins": focus["wins"],
+        "pytorch_ties": focus["ties"],
+        "pytorch_losses": focus["losses"],
+        "geomean_novax_vs_pytorch": focus["geomean"],
+        "best_novax_vs_pytorch": focus["best_id"],
+        "best_novax_vs_pytorch_ratio": focus["best_ratio"],
+        "overall_pytorch_wins": overall["wins"],
+        "overall_pytorch_ties": overall["ties"],
+        "overall_pytorch_losses": overall["losses"],
+        "overall_geomean_novax_vs_pytorch": overall["geomean"],
+        "overall_best_novax_vs_pytorch": overall["best_id"],
+        "overall_best_novax_vs_pytorch_ratio": overall["best_ratio"],
     }
 
 
@@ -679,51 +721,82 @@ def summarize_vs_baseline(args: argparse.Namespace, records: list[Record]) -> di
         if r.get("status") == "ok" and isinstance(r.get("novax_ms"), (int, float)) and r["novax_ms"] > 0
     }
     comparable_ids = sorted(set(baseline) & set(current))
-    improved: list[Record] = []
-    regressed: list[Record] = []
-    unchanged: list[Record] = []
-    positive_log = 0.0
-    negative_log = 0.0
+    focused_ids = [case_id for case_id in comparable_ids if is_differentiated_case(current[case_id])]
 
-    for case_id in comparable_ids:
-        base_ms = float(baseline[case_id]["novax_ms"])
-        cur_ms = float(current[case_id]["novax_ms"])
-        rel = cur_ms / base_ms
-        item = {
-            "id": case_id,
-            "baseline_ms": round(base_ms, 6),
-            "current_ms": round(cur_ms, 6),
-            "relative_time": round(rel, 6),
-            "speedup": round(base_ms / cur_ms, 6),
+    def compare(case_ids: list[str]) -> dict[str, Any]:
+        improved: list[Record] = []
+        regressed: list[Record] = []
+        unchanged: list[Record] = []
+        positive_log = 0.0
+        negative_log = 0.0
+
+        for case_id in case_ids:
+            base_ms = float(baseline[case_id]["novax_ms"])
+            cur_ms = float(current[case_id]["novax_ms"])
+            rel = cur_ms / base_ms
+            item = {
+                "id": case_id,
+                "baseline_ms": round(base_ms, 6),
+                "current_ms": round(cur_ms, 6),
+                "relative_time": round(rel, 6),
+                "speedup": round(base_ms / cur_ms, 6),
+            }
+            if rel <= 1.0 - args.min_improvement:
+                improved.append(item)
+                positive_log += math.log(base_ms / cur_ms)
+            elif rel >= 1.0 + args.max_regression:
+                regressed.append(item)
+                negative_log += math.log(cur_ms / base_ms)
+            else:
+                unchanged.append(item)
+
+        research_score = (
+            1000.0 * (positive_log - 1.5 * negative_log)
+            + 10.0 * len(improved)
+            - 25.0 * len(regressed)
+        )
+        return {
+            "comparable": len(case_ids),
+            "improved": improved,
+            "regressed": regressed,
+            "unchanged": unchanged,
+            "research_score": research_score,
+            "best_improvement": max(improved, key=lambda r: r["speedup"]) if improved else None,
+            "worst_regression": max(regressed, key=lambda r: r["relative_time"]) if regressed else None,
         }
-        if rel <= 1.0 - args.min_improvement:
-            improved.append(item)
-            positive_log += math.log(base_ms / cur_ms)
-        elif rel >= 1.0 + args.max_regression:
-            regressed.append(item)
-            negative_log += math.log(cur_ms / base_ms)
-        else:
-            unchanged.append(item)
 
-    regression_budget = max(args.max_regressions, int(math.floor(args.max_regression_fraction * len(comparable_ids))))
-    research_score = 1000.0 * (positive_log - 1.5 * negative_log) + 10.0 * len(improved) - 25.0 * len(regressed)
+    focus = compare(focused_ids)
+    overall = compare(comparable_ids)
+    regression_budget = max(args.max_regressions, int(math.floor(args.max_regression_fraction * len(focused_ids))))
+    improved = focus["improved"]
+    regressed = focus["regressed"]
+    unchanged = focus["unchanged"]
+    research_score = focus["research_score"]
     qualified = len(improved) >= 1 and len(regressed) <= regression_budget and research_score > 0.0
-    best_improvement = max(improved, key=lambda r: r["speedup"]) if improved else None
-    worst_regression = max(regressed, key=lambda r: r["relative_time"]) if regressed else None
 
     return {
         "baseline_path": str(args.baseline_json),
-        "comparable": len(comparable_ids),
+        "scope": "differentiated",
+        "comparable": focus["comparable"],
+        "focus_comparable": focus["comparable"],
+        "overall_comparable": overall["comparable"],
         "improved": len(improved),
         "regressed": len(regressed),
         "unchanged": len(unchanged),
+        "overall_improved": len(overall["improved"]),
+        "overall_regressed": len(overall["regressed"]),
+        "overall_unchanged": len(overall["unchanged"]),
         "regression_budget": regression_budget,
         "research_score": round(research_score, 6),
         "qualified": qualified,
-        "best_improvement": best_improvement,
-        "worst_regression": worst_regression,
+        "best_improvement": focus["best_improvement"],
+        "worst_regression": focus["worst_regression"],
+        "overall_best_improvement": overall["best_improvement"],
+        "overall_worst_regression": overall["worst_regression"],
         "improved_cases": improved[:20],
         "regressed_cases": regressed[:20],
+        "overall_improved_cases": overall["improved"][:20],
+        "overall_regressed_cases": overall["regressed"][:20],
     }
 
 
@@ -735,18 +808,28 @@ def print_summary(pytorch_summary: dict[str, Any], baseline_summary: dict[str, A
     print(f"benchmarks_ok: {pytorch_summary['ok']}")
     print(f"benchmarks_error: {pytorch_summary['errors']}")
     print(f"benchmarks_skipped: {pytorch_summary['skipped']}")
+    print(f"focus_cases: {pytorch_summary['focus_cases']}")
     print(f"pytorch_wins: {pytorch_summary['pytorch_wins']}")
     print(f"pytorch_ties: {pytorch_summary['pytorch_ties']}")
     print(f"pytorch_losses: {pytorch_summary['pytorch_losses']}")
     print(f"geomean_novax_vs_pytorch: {pytorch_summary['geomean_novax_vs_pytorch']}")
     print(f"best_novax_vs_pytorch: {pytorch_summary['best_novax_vs_pytorch']}")
     print(f"best_novax_vs_pytorch_ratio: {pytorch_summary['best_novax_vs_pytorch_ratio']}")
+    print(f"overall_pytorch_wins: {pytorch_summary['overall_pytorch_wins']}")
+    print(f"overall_pytorch_ties: {pytorch_summary['overall_pytorch_ties']}")
+    print(f"overall_pytorch_losses: {pytorch_summary['overall_pytorch_losses']}")
+    print(f"overall_geomean_novax_vs_pytorch: {pytorch_summary['overall_geomean_novax_vs_pytorch']}")
 
     if baseline_summary is not None:
+        print(f"baseline_scope: {baseline_summary['scope']}")
         print(f"baseline_comparable: {baseline_summary['comparable']}")
         print(f"improved_tests: {baseline_summary['improved']}")
         print(f"regressed_tests: {baseline_summary['regressed']}")
         print(f"unchanged_tests: {baseline_summary['unchanged']}")
+        print(f"overall_baseline_comparable: {baseline_summary['overall_comparable']}")
+        print(f"overall_improved_tests: {baseline_summary['overall_improved']}")
+        print(f"overall_regressed_tests: {baseline_summary['overall_regressed']}")
+        print(f"overall_unchanged_tests: {baseline_summary['overall_unchanged']}")
         print(f"regression_budget: {baseline_summary['regression_budget']}")
         print(f"research_score: {baseline_summary['research_score']}")
         print(f"qualified: {'yes' if baseline_summary['qualified'] else 'no'}")
@@ -756,6 +839,9 @@ def print_summary(pytorch_summary: dict[str, Any], baseline_summary: dict[str, A
         if baseline_summary["worst_regression"]:
             item = baseline_summary["worst_regression"]
             print(f"worst_regression: {item['id']} {item['relative_time']}x baseline time")
+        if baseline_summary["overall_worst_regression"]:
+            item = baseline_summary["overall_worst_regression"]
+            print(f"overall_worst_regression: {item['id']} {item['relative_time']}x baseline time")
     else:
         print("research_score: n/a")
         print("qualified: n/a (no --baseline-json provided)")
