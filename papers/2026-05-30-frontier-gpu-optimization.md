@@ -265,6 +265,12 @@ Experiment note:
   versus the saved baseline. This supports the CudaForge/CUDA Agent lesson:
   shape-specific small-GEMM variants need profiler feedback or autotuned search,
   because plausible occupancy reductions can lose to the simpler kept tile.
+- `e5e58ed` lowered `a*b + c` fused expression trees to explicit CUDA `fmaf`.
+  Correctness passed, but `fusion_chain5_n1000000` regressed by 1.44x versus
+  the saved baseline and the focused gate failed. This supports the
+  Astra/Nautilus lesson: local instruction substitutions are too shallow when
+  the profitable frontier is fusion planning, memory traffic, and schedule
+  selection.
 
 ## Things Not To Repeat Blindly
 
@@ -291,3 +297,5 @@ Experiment note:
   an autotune sweep.
 - Row-coarsened exact 64x64 matmul unless profiler counters show the kept
   16x16 one-output-per-thread tile is occupancy- or synchronization-limited.
+- Explicit `fmaf` expression lowering for fusion chains; NVCC likely already
+  contracts the multiply-add where profitable.

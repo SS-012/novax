@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 82
+- Logged rows: 83
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 81
-- Unique non-baseline experiment commits: 80
+- Experiment evaluations after baseline: 82
+- Unique non-baseline experiment commits: 81
 - Currently successful unique experiments: 16
 - Strict benchmark-qualified performance successes: 3
-- Currently discarded or reverted unique experiments: 64
+- Currently discarded or reverted unique experiments: 65
 
 Definitions:
 
@@ -248,6 +248,13 @@ with score `-1372.581309`, 3 focused improvements, 3 focused regressions, and
 `matmul_64x64_x_64x64` regressing to 1.62x the saved baseline time. The kept
 exact-64 kernel is already close enough that occupancy/thread-count tweaks must
 be profiler-driven rather than guessed.
+Experiment `e5e58ed` lowered fused multiply-add expression subtrees to explicit
+CUDA `fmaf(a, b, c)`, targeting `fusion_chain3_n1000000` and
+`fusion_chain5_n1000000`. Tests passed, but the benchmark failed with score
+`-1254.545042`, 1 focused improvement, 6 focused regressions, and
+`fusion_chain5_n1000000` regressing to 1.44x the saved baseline time. NVCC's
+default multiply-add contraction is likely already good enough here; explicit
+intrinsics do not substitute for dataflow-level fusion planning.
 
 ## Successful Experiments Kept
 
@@ -340,6 +347,7 @@ These experiments should not be retried in the same form.
 | `2a90d48` | discard | Caching fused launch kernels qualified once but failed confirmation and tiebreaker. |
 | `5eb4d27` | discard | Smaller fused-transcendental blocks failed twice and regressed fusion-chain guardrails. |
 | `54cd5f4` | discard | Row-coarsened exact 64x64 matmul regressed the target small-matmul path and failed the focused gate. |
+| `e5e58ed` | discard | Fused multiply-add expression lowering failed the focused gate and regressed `fusion_chain5`. |
 
 ## Full Experiment Ledger
 
@@ -427,6 +435,7 @@ These experiments should not be retried in the same form.
 | `2a90d48` | discard | no | 3 | 1 | 0 | -85.075841 | 0.602476 | Fused launch kernel caching qualified once but failed confirmation and tiebreaker, so it was reverted. |
 | `5eb4d27` | discard | no | 2 | 2 | 0 | -141.997612 | 0.612282 | Smaller blocks for fused transcendental kernels failed twice and regressed fusion-chain guardrails. |
 | `54cd5f4` | discard | no | 3 | 3 | 0 | -1372.581309 | 0.642395 | Row-coarsened exact 64x64 matmul regressed the target small-matmul path and failed the focused gate. |
+| `e5e58ed` | discard | no | 1 | 6 | 0 | -1254.545042 | 0.602699 | Fused multiply-add expression lowering failed the focused gate and regressed `fusion_chain5`. |
 
 ## Future Research Directions
 
