@@ -42,6 +42,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [CUDA-L2: Surpassing cuBLAS Performance for Matrix Multiplication through Reinforcement Learning](https://arxiv.org/abs/2512.02551) | The strongest matmul results come from automated search across a large kernel configuration space with measured execution speed as the reward. | NovaX should not expect static hand tweaks to beat cuBLAS/PyTorch broadly; serious matmul wins need a shape-keyed autotuning loop or vendor-library plan cache. |
 | [tritonBLAS: Triton-based Analytical Approach for GEMM Kernel Parameter Selection](https://arxiv.org/abs/2512.04226) | Analytical models can predict near-optimal GEMM tiling from hardware/cache/shape parameters without paying full empirical autotuning cost. | For NovaX fused-mm, use shape-keyed analytical defaults before brute-force search; the 128 and 256 benchmark shapes likely need different tile/epilogue tactics. |
 | [FalconGEMM: Surpassing Hardware Peaks with Lower-Complexity Matrix Multiplication](https://arxiv.org/abs/2605.06057) | A 2026 GEMM framework combines code generation, group-parallel optimizations, and an analytical decision model to choose strategies by shape and hardware. | NovaX small-GEMM and fused-mm work should move toward generated candidate families with shape selection; one-off direct/shared-memory edits are too brittle. |
+| [GEMM-GS: Accelerating 3D Gaussian Splatting on Tensor Cores with GEMM-Compatible Blending](https://arxiv.org/abs/2604.02120) | A non-GEMM workload is reformulated into GEMM-compatible tiles to use Tensor Cores, with a staged pipeline overlapping memory and computation. | NovaX should prefer transformations that move work toward Tensor Core/vendor-friendly GEMM paths over local shared-memory tweaks when arithmetic intensity is high. |
 | [A Few Fit Most: Improving Performance Portability of SGEMM on GPUs using Multi-Versioning](https://arxiv.org/abs/2507.15277) | A single GEMM kernel rarely stays near-optimal across devices and shapes; a small set of generated variants can be more portable than one universal kernel. | NovaX fused-mm should move toward a shape-keyed kernel family, but variants need measured selection. A hand-picked exact-tile version without profiling is still just a static guess. |
 | [OptiML: An End-to-End Framework for Program Synthesis and CUDA Kernel Optimization](https://arxiv.org/abs/2602.12305) | Kernel optimization is framed as search under verification, with profiler-aware rewards guiding edits. | Fast-math substitutions should be treated as benchmarked candidates, not assumed wins; NovaX needs confirmation runs and correctness/latency gates for approximate math. |
 | [FlashFuser: Expanding the Scale of Kernel Fusion for Compute-Intensive Operators via Inter-Core Connection](https://arxiv.org/abs/2512.12949) | Large fusion wins come from reducing memory traffic with hardware-aware data movement and scheduling, not just syntactically combining operators. | NovaX's fused-mm edge needs a real tiled epilogue/fusion strategy; descriptor or stream-state micro-caching is unlikely to be enough. |
@@ -212,6 +213,11 @@ Experiment note:
   multi-versioning lesson: even tiny GEMM variants need generated/selected
   strategies and repeated measurements, not a single plausible memory-hierarchy
   swap.
+- `be748f9` padded the exact 64x64 shared-memory tiles from 16 to 17 columns.
+  Correctness passed, but `matmul_64x64_x_64x64` regressed by 1.47x versus the
+  saved baseline. This reinforces the FlipFlop/profiling lesson: shared-memory
+  layout changes need counters or a measured search space; folklore bank
+  conflict fixes can hurt the current tile.
 - `2211a84` added an exact zero-bias `128x256x128` fused matmul+ReLU kernel
   with no boundary checks, no bias load, and no runtime shape arguments. It
   repeatedly improved both 128 fused-mm rows, but failed the focused gate twice
@@ -426,6 +432,8 @@ Experiment note:
   without measured plan selection; the direct swap regressed the focused suite.
 - Direct global-memory exact 64x64 matmul as a replacement for the kept
   shared-memory exact64 kernel; the confirmation run regressed the target row.
+- Padding the exact64 shared-memory tiles to 17 columns without profiler
+  evidence; it regressed the target 64x64 matmul row.
 - Exact repeated-inference rectangular cuBLAS routing in the current Python
   launcher form; it improved captured inference once but regressed seven
   focused rows, including square matmul.
