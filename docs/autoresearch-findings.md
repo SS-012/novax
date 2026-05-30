@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 93
+- Logged rows: 94
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 92
-- Unique non-baseline experiment commits: 91
+- Experiment evaluations after baseline: 93
+- Unique non-baseline experiment commits: 92
 - Currently successful unique experiments: 17
 - Strict benchmark-qualified performance successes: 4
-- Currently discarded or reverted unique experiments: 74
+- Currently discarded or reverted unique experiments: 75
 
 Definitions:
 
@@ -317,6 +317,13 @@ Experiment `552c315` routed square matmul sizes 256 and larger through
 confirmed the GemmEx path was used, but the benchmark failed with score
 `-2162.792819`, 0 focused improvements, and 7 focused regressions. The saved
 legacy TF32 Sgemm path remains better for NovaX's current square matmul mix.
+Experiment `1bf272a` replaced the kept exact 64x64 shared-memory tiled matmul
+with a direct global-load kernel and fully unrolled 64-wide dot product.
+Correctness passed. The primary run qualified only because captured inference
+moved favorably, not because the target row improved. Confirmation failed with
+score `-2305.804106`, 1 focused improvement, and 7 focused regressions; the
+target `matmul_64x64_x_64x64` row regressed to 0.014 ms. Keep the shared-memory
+exact64 kernel.
 Experiment `81fe1de` used 256-thread blocks only for ReLU-only fused
 elementwise expressions, leaving `expf`/`tanhf` chains on the current block
 choice. Correctness passed, but the benchmark failed with score `-124.063579`,
@@ -426,6 +433,7 @@ These experiments should not be retried in the same form.
 | `a4120d8` | discard | Coarsening large fused elementwise kernels regressed both fusion-chain rows. |
 | `1765103` | discard | Caching large fused-kernel inputs in locals regressed `fusion_chain5` and failed the focused gate. |
 | `552c315` | discard | Square matmul through `cublasGemmEx` produced no saved-best improvements and regressed focused rows. |
+| `1bf272a` | discard | Direct global-memory exact 64x64 matmul regressed the target row on confirmation. |
 
 ## Full Experiment Ledger
 
@@ -524,6 +532,7 @@ These experiments should not be retried in the same form.
 | `a4120d8` | discard | no | 2 | 4 | 0 | -1813.882196 | 0.645422 | Coarsening large fused elementwise kernels regressed both fusion-chain rows. |
 | `1765103` | discard | no | 3 | 7 | 0 | -2075.237661 | 0.597707 | Caching large fused-kernel inputs in locals regressed `fusion_chain5` and failed the focused gate. |
 | `552c315` | discard | no | 0 | 7 | 0 | -2162.792819 | 0.565353 | Square matmul through `cublasGemmEx` produced no saved-best improvements and regressed focused rows. |
+| `1bf272a` | discard | no | 1 | 7 | 0 | -2305.804106 | 0.593476 | Direct global-memory exact 64x64 matmul regressed the target row on confirmation. |
 
 ## Future Research Directions
 
