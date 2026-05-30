@@ -403,3 +403,4 @@ class TestGPUNewOps:
         graph = nx.CUDAGraph()
         graph.capture(lambda: nx.neg(a).eval())
         graph.replay()
+        graph.replay_many(2)

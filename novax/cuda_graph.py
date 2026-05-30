@@ -83,6 +83,20 @@ class CUDAGraph:
         stream_handle = ctypes.c_void_p(int(self._stream.handle))
         _check(self._cudart.cudaGraphLaunch(self._exec, stream_handle), "cudaGraphLaunch")
 
+    def replay_many(self, count: int):
+        """Replay the captured graph repeatedly with less Python call overhead."""
+        if not self._exec.value:
+            raise RuntimeError("CUDAGraph.capture() must be called before replay_many()")
+        if count < 0:
+            raise ValueError("count must be non-negative")
+        launch = self._cudart.cudaGraphLaunch
+        graph_exec = self._exec
+        stream_handle = ctypes.c_void_p(int(self._stream.handle))
+        for _ in range(count):
+            status = launch(graph_exec, stream_handle)
+            if status != 0:
+                raise RuntimeError(f"cudaGraphLaunch failed with CUDA runtime status {status}")
+
     def __del__(self):
         try:
             if self._exec.value:
