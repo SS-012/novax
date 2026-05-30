@@ -30,6 +30,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [AutoKernel: Autonomous GPU Kernel Optimization via Iterative Agent-Driven Search](https://arxiv.org/abs/2603.21331) | A 2026 autonomous kernel loop profiles a model, ranks bottlenecks by Amdahl impact, then validates candidates through smoke tests, shape sweeps, numerical checks, determinism checks, and edge cases before recording speedups. | NovaX's loop should keep the current correctness-plus-benchmark gate, but add bottleneck ranking/profiling notes so experiments attack the cases that dominate focused geomean. |
 | [CudaForge: An Agent Framework with Hardware Feedback for CUDA Kernel Optimization](https://arxiv.org/abs/2511.01884) | The agent loop explicitly combines candidate generation, correctness checks, hardware feedback such as Nsight Compute metrics, and repeated improvement. | NovaX should start attaching profiler counters to repeated failures around fused-mm and exact small GEMM; static edits are not enough once the target is near the noise floor. |
 | [CUDA Agent: Large-Scale Agentic RL for High-Performance CUDA Kernel Generation](https://arxiv.org/abs/2602.24286) | The frontier is moving toward learned CUDA optimization skill with reliable verification and profiling rewards, not one-off prompt guesses. | Keep the autoresearch loop strict: correctness, focused latency, and regression guardrails should define reward. Longer-term, collect failed variants as training/search data. |
+| [KernelBlaster: Continual Cross-Task CUDA Optimization via Memory-Augmented In-Context Reinforcement Learning](https://arxiv.org/abs/2602.14293) | A 2026 agentic CUDA optimizer stores prior optimization attempts in a persistent knowledge base and uses them to guide future edits. | NovaX should treat `autoresearch/results.tsv`, benchmark artifacts, and this paper log as memory: each failure should constrain the next search rather than being rediscovered. |
 | [Astra: A Multi-Agent System for GPU Kernel Performance Optimization](https://arxiv.org/abs/2509.07506) | Starting from existing CUDA kernels and iteratively applying loop transformations, memory-access changes, intrinsics, and fast math is a viable optimization workflow. | NovaX experiments should mutate the existing hot CUDA strings in small verifiable steps, but only keep transformations that survive full focused-suite validation. |
 | [KernelAgent: Hardware-Guided GPU Kernel Optimization via Multi-Agent Orchestration](https://pytorch.org/blog/kernelagent-hardware-guided-gpu-kernel-optimization-via-multi-agent-orchestration/) | PyTorch's 2026 hardware-guided loop emphasizes profiler-derived bottleneck diagnosis before proposing kernel changes. | NovaX should increasingly attach profiling notes to experiments; pure Python launch-source caching can look plausible but still sit below benchmark noise. |
 | [TileLang: A Composable Tiled Programming Model for AI Systems](https://arxiv.org/abs/2504.17577) | Separating dataflow from scheduling gives a usable way to express tiled kernels while leaving thread binding, layout, tensorization, and pipelining tunable. | A future NovaX backend could generate TileLang/Triton-like kernels from focused graph patterns instead of hand-authoring each CUDA kernel. |
@@ -84,6 +85,16 @@ Benchmark target:
 Expected mechanism:
 
 - remove Python, PyCUDA, and CUDA driver setup from repeated static execution.
+
+Experiment note:
+
+- `bea1152` routed the two exact repeated-inference rectangular GEMM shapes
+  through TF32 cuBLAS. Correctness passed and `inference_capture_300_passes`
+  improved once by about 1.17x, but seven focused rows regressed and the gate
+  failed. The lesson is not that inference GEMM library routing is hopeless;
+  it is that library-state or math-mode changes must be isolated and validated
+  against square matmul/fused-mm guardrails, or moved behind a lower-level
+  graph/runtime plan.
 
 ### H2: Primitive graph lowering for fusion
 
@@ -401,3 +412,6 @@ Experiment note:
   without measured plan selection; the direct swap regressed the focused suite.
 - Direct global-memory exact 64x64 matmul as a replacement for the kept
   shared-memory exact64 kernel; the confirmation run regressed the target row.
+- Exact repeated-inference rectangular cuBLAS routing in the current Python
+  launcher form; it improved captured inference once but regressed seven
+  focused rows, including square matmul.

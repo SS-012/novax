@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 94
+- Logged rows: 95
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 93
-- Unique non-baseline experiment commits: 92
+- Experiment evaluations after baseline: 94
+- Unique non-baseline experiment commits: 93
 - Currently successful unique experiments: 17
 - Strict benchmark-qualified performance successes: 4
-- Currently discarded or reverted unique experiments: 75
+- Currently discarded or reverted unique experiments: 76
 
 Definitions:
 
@@ -324,6 +324,13 @@ moved favorably, not because the target row improved. Confirmation failed with
 score `-2305.804106`, 1 focused improvement, and 7 focused regressions; the
 target `matmul_64x64_x_64x64` row regressed to 0.014 ms. Keep the shared-memory
 exact64 kernel.
+Experiment `bea1152` routed the two exact repeated-inference rectangular GEMM
+shapes through TF32 cuBLAS. Correctness passed and captured inference improved
+by about 1.17x in the primary benchmark, but the focused gate failed with score
+`-3007.831691`, 2 focused improvements, and 7 focused regressions. The worst
+regression was `matmul_256x256_x_256x256` at 2.67x the saved baseline time.
+The change was reverted; exact rectangular cuBLAS may need isolated graph-path
+benchmarking or lower-level plan control before it is safe.
 Experiment `81fe1de` used 256-thread blocks only for ReLU-only fused
 elementwise expressions, leaving `expf`/`tanhf` chains on the current block
 choice. Correctness passed, but the benchmark failed with score `-124.063579`,
@@ -434,6 +441,7 @@ These experiments should not be retried in the same form.
 | `1765103` | discard | Caching large fused-kernel inputs in locals regressed `fusion_chain5` and failed the focused gate. |
 | `552c315` | discard | Square matmul through `cublasGemmEx` produced no saved-best improvements and regressed focused rows. |
 | `1bf272a` | discard | Direct global-memory exact 64x64 matmul regressed the target row on confirmation. |
+| `bea1152` | discard | Exact repeated-inference rectangular cuBLAS improved capture once but regressed seven focused rows. |
 
 ## Full Experiment Ledger
 
@@ -533,6 +541,7 @@ These experiments should not be retried in the same form.
 | `1765103` | discard | no | 3 | 7 | 0 | -2075.237661 | 0.597707 | Caching large fused-kernel inputs in locals regressed `fusion_chain5` and failed the focused gate. |
 | `552c315` | discard | no | 0 | 7 | 0 | -2162.792819 | 0.565353 | Square matmul through `cublasGemmEx` produced no saved-best improvements and regressed focused rows. |
 | `1bf272a` | discard | no | 1 | 7 | 0 | -2305.804106 | 0.593476 | Direct global-memory exact 64x64 matmul regressed the target row on confirmation. |
+| `bea1152` | discard | no | 2 | 7 | 0 | -3007.831691 | 0.550459 | Exact repeated-inference rectangular cuBLAS improved capture once but regressed seven focused rows. |
 
 ## Future Research Directions
 
