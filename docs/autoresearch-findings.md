@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 74
+- Logged rows: 75
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 73
-- Unique non-baseline experiment commits: 72
+- Experiment evaluations after baseline: 74
+- Unique non-baseline experiment commits: 73
 - Currently successful unique experiments: 15
 - Strict benchmark-qualified performance successes: 2
-- Currently discarded or reverted unique experiments: 57
+- Currently discarded or reverted unique experiments: 58
 
 Definitions:
 
@@ -189,6 +189,11 @@ Experiment `dfe4345` added `__restrict__` qualifiers to generic fused
 elementwise kernel pointers. It produced no focused improvements and regressed
 two focused fused-mm cases versus the new TF32 baseline. Alias-hint-only fusion
 changes are not enough for the current focused suite.
+Experiment `29a37e2` tracked all-zero tensors on GPU upload and generated a
+zero-bias fused matmul+ReLU kernel that skipped `B[col]` loads/adds. The
+benchmark bias tensors are zero, but the change produced no focused
+improvements and regressed five focused cases. Bias-load removal is not the
+current fused-mm bottleneck.
 
 ## Successful Experiments Kept
 
@@ -273,6 +278,7 @@ These experiments should not be retried in the same form.
 | `a8d9886` | discard | Fast `__expf` in fused sigmoid chains improved `fusion_chain5` once but failed confirmation and the focused gate. |
 | `9f22443` | discard | TF32 cuBLAS plus in-place epilogue improved large fused-mm targets but qualified only once across three runs. |
 | `dfe4345` | discard | `__restrict__` fused-kernel pointer hints produced no focused improvements and regressed fused-mm cases. |
+| `29a37e2` | discard | Zero-bias fused matmul specialization produced no focused improvements and regressed focused cases. |
 
 ## Full Experiment Ledger
 
@@ -352,6 +358,7 @@ These experiments should not be retried in the same form.
 | `0c8c0ac` | keep | yes | 6 | 2 | 0 | 661.399441 | 0.622541 | Enabled TF32 tensor math for square cuBLAS matmul and qualified twice with large focused matmul wins. |
 | `9f22443` | discard | no | 4 | 3 | 0 | 171.899694 | 0.610088 | Large fused-mm through TF32 cuBLAS improved target cases but qualified only once across three runs. |
 | `dfe4345` | discard | no | 0 | 2 | 0 | -555.194185 | 0.611843 | Restrict qualifiers on fused elementwise kernels produced no focused improvements and regressed fused-mm cases. |
+| `29a37e2` | discard | no | 0 | 5 | 0 | -1099.821460 | 0.647448 | Zero-bias fused matmul specialization produced no focused improvements and regressed fusion and fused-mm cases. |
 
 ## Future Research Directions
 

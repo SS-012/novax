@@ -34,6 +34,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [OptiML: An End-to-End Framework for Program Synthesis and CUDA Kernel Optimization](https://arxiv.org/abs/2602.12305) | Kernel optimization is framed as search under verification, with profiler-aware rewards guiding edits. | Fast-math substitutions should be treated as benchmarked candidates, not assumed wins; NovaX needs confirmation runs and correctness/latency gates for approximate math. |
 | [FlashFuser: Expanding the Scale of Kernel Fusion for Compute-Intensive Operators via Inter-Core Connection](https://arxiv.org/abs/2512.12949) | Large fusion wins come from reducing memory traffic with hardware-aware data movement and scheduling, not just syntactically combining operators. | NovaX's fused-mm edge needs a real tiled epilogue/fusion strategy; descriptor or stream-state micro-caching is unlikely to be enough. |
 | [CODA: Rewriting Transformer Blocks as GEMM-Epilogue Programs](https://arxiv.org/abs/2605.19269) | A 2026 result argues that many memory-bound transformer side operations should execute as composable GEMM epilogues while GEMM output tiles are still on chip. | NovaX's fused-mm path should move toward true GEMM-epilogue fusion, not GEMM followed by a separate epilogue kernel. |
+| [Fusing Epilog Operations with Matrix Multiplication Using nvmath-python](https://developer.nvidia.com/blog/fusing-epilog-operations-with-matrix-multiplication-using-nvmath-python/) | NVIDIA's current guidance for bias/ReLU matmul fusion is to use library epilogues that perform the post-op inside the matmul plan, avoiding extra traffic and launches. | NovaX should not expect manually skipping a zero bias load inside its naive CUDA tile to close the fused-mm gap; the route is true library or generated epilogues. |
 | [Dissecting the NVIDIA Blackwell Architecture with Microbenchmarks](https://arxiv.org/abs/2507.10789) | Blackwell exposes major performance through newer Tensor Core paths and memory hierarchy behavior; kernel choices must map to those hardware units. | For square GEMM, NovaX should prefer vendor Tensor Core math modes over hand-written FP32 CUDA tiles when accuracy policy allows it. |
 | [Microbenchmark-Driven Analytical Performance Modeling Across Modern GPU Architectures](https://arxiv.org/abs/2605.04178) | Modern GPU performance work benefits from microbenchmark-grounded models of Tensor Cores and memory hierarchy rather than generic rules of thumb. | When NovaX sees a shape-stable GEMM case, first test hardware-backed library modes and shape gates before writing another kernel. |
 | [Evaluating CUDA Tile for AI Workloads on Hopper and Blackwell GPUs](https://arxiv.org/abs/2604.23466) | Modern tile-centric APIs try to expose Tensor Core and TMA efficiency through a higher-level programming model, but performance still depends on mapping the tile schedule to the workload. | NovaX fusion work should move toward explicit tile/schedule choices; adding low-level qualifiers to the existing scalar-per-element kernel is too shallow. |
@@ -200,6 +201,11 @@ Experiment note:
   fused-mm cases. This supports the CUDA Tile/Nautilus lesson: NovaX needs
   explicit scheduling or tile-level changes for fusion, not shallow compiler
   hinting on the same scalar kernel shape.
+- `29a37e2` tracked all-zero GPU tensors and skipped bias loads/adds in the
+  fused matmul+ReLU kernel when the bias was zero. The focused benchmark still
+  had zero improvements and five regressions. This supports the epilogue-fusion
+  lesson: the cost is not the scalar bias load; the larger issue is using a
+  naive FP32 tile instead of a Tensor Core GEMM with true epilogue fusion.
 
 ## Things Not To Repeat Blindly
 
@@ -211,6 +217,7 @@ Experiment note:
 - GEMM plus a separate epilogue launch as a substitute for true epilogue fusion.
 - Fast-math substitutions without repeatable target-case wins.
 - Pointer qualifier or signature-only fused-kernel tweaks.
+- Zero-bias special cases inside the naive fused-mm tile.
 - Softmax fast-math changes that do not improve the softmax benchmark itself.
 - GPU backward rewrites that touch unrelated eager/autograd behavior.
 - CUDA graph replay micro-tweaks unless captured inference itself improves.
