@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 68
+- Logged rows: 69
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 67
-- Unique non-baseline experiment commits: 66
+- Experiment evaluations after baseline: 68
+- Unique non-baseline experiment commits: 67
 - Currently successful unique experiments: 14
 - Strict benchmark-qualified performance successes: 1
-- Currently discarded or reverted unique experiments: 52
+- Currently discarded or reverted unique experiments: 53
 
 Definitions:
 
@@ -151,6 +151,11 @@ inference in the single run, but five focused cases regressed, including the
 128 fused-mm linear case and multiple square matmul cases. The result suggests
 that this call is not the dominant hot-path cost, and that cuBLAS state tweaks
 are too noisy unless they improve the matmul/fused-mm targets directly.
+Experiment `c5e8268` added a 16x32 rectangular tile for the direct fused
+matmul+bias+ReLU primitive, plus a direct GPU correctness test. Correctness
+passed, but the focused benchmark showed zero improvements and eight
+regressions versus the saved best. The saved 16x16 fused-mm kernel remains
+better for the current focused shapes.
 
 ## Successful Experiments Kept
 
@@ -229,6 +234,7 @@ These experiments should not be retried in the same form.
 | `1086ca8` | discard | Specialized fixed kernels for the focused fusion chains did not improve fusion enough and failed the focused gate. |
 | `77ed4e7` | discard | Batched CUDA graph replay in Python did not improve captured inference and failed the focused score gate. |
 | `9a904b1` | discard | Cached cuBLAS stream binding improved captured inference only, while regressing five focused cases. |
+| `c5e8268` | discard | A 16x32 rectangular fused-mm tile passed correctness but produced zero focused improvements and eight regressions. |
 
 ## Full Experiment Ledger
 
@@ -302,6 +308,7 @@ These experiments should not be retried in the same form.
 | `1086ca8` | discard | no | 2 | 3 | 0 | -826.233543 | 0.706146 | Specialized focused fusion-chain kernels did not improve fusion enough and failed focused gate. |
 | `77ed4e7` | discard | no | 2 | 2 | 0 | -192.839153 | 0.696145 | Batched cuda graph replay API did not improve capture and failed focused research score. |
 | `9a904b1` | discard | no | 1 | 5 | 0 | -4158.420902 | 0.688372 | Cached cuBLAS stream binding improved captured inference but regressed five focused cases including fused-mm and matmul. |
+| `c5e8268` | discard | no | 0 | 8 | 0 | -3943.210591 | 0.728258 | Rectangular 16x32 fused matmul tile failed to improve focused baseline and regressed fused-mm and matmul cases. |
 
 ## Future Research Directions
 

@@ -116,6 +116,11 @@ Experiment note:
   with 7 regressions. The next vendor-kernel attempt should cache planning more
   aggressively or move to a persistent shape-specific wrapper outside the hot
   Python loop; otherwise the descriptor/heuristic surface eats the win.
+- `c5e8268` tested a 16x32 rectangular tile for the direct fused
+  matmul+bias+ReLU primitive. Correctness passed, but the focused gate saw zero
+  improvements and eight regressions. The current 16x16 tile remains the better
+  hand-written CUDA baseline for these shapes; future fused-mm work should use
+  profile/autotune search rather than another static tile guess.
 
 ### H4: GPU-resident MLP backward, gated narrowly
 
@@ -167,6 +172,7 @@ Experiment note:
 - General rectangular cuBLAS routing without shape gates.
 - cuBLAS state micro-caching unless the matmul or fused-mm targets themselves
   improve.
+- Static fused-mm tile changes without profiling or an autotune search.
 - Softmax fast-math changes that do not improve the softmax benchmark itself.
 - GPU backward rewrites that touch unrelated eager/autograd behavior.
 - CUDA graph replay micro-tweaks unless captured inference itself improves.
