@@ -333,28 +333,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     assert expr is not None, "All inputs must be broadcastable to the output shape"
 
     params = ", ".join([f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"])
-    cache_inputs = n >= 1_000_000 and all(t.size == n for t in inputs)
-    if cache_inputs:
-        kernel_name = f"{op_name}_cached_inputs"
-        cached_expr = expr
-        loads = []
-        for i in range(len(inputs)):
-            name = f"v{i}"
-            loads.append(f"            const float {name} = x{i}[idx];")
-            cached_expr = cached_expr.replace(f"x{i}[idx]", name)
-        input_loads = "\n".join(loads)
-        kernel_src = f"""
-    __global__ void {kernel_name}({params}) {{
-        int idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx < n) {{
-{input_loads}
-            out[idx] = {cached_expr};
-        }}
-    }}
-    """
-        func = get_kernel(kernel_name, kernel_src)
-    else:
-        kernel_src = f"""
+    kernel_src = f"""
     __global__ void {op_name}({params}) {{
         int idx = threadIdx.x + blockIdx.x * blockDim.x;
         if (idx < n) {{
@@ -362,7 +341,7 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
         }}
     }}
     """
-        func = get_kernel(op_name, kernel_src)
+    func = get_kernel(op_name, kernel_src)
     out_gpu = mempool.alloc(n * 4)
     bs = _optimal_block_size()
     block = (bs, 1, 1)
