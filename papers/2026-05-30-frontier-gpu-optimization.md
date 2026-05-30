@@ -76,6 +76,13 @@ Expected mechanism:
 - avoid both over-fusion and under-fusion by selecting kernel boundaries
   intentionally.
 
+Experiment note:
+
+- `1086ca8` added fixed kernels for the two current fusion-chain benchmarks.
+  The focused gate failed and the intended fusion targets did not improve
+  enough. Future primitive lowering should not just special-case expression
+  strings; it needs scheduling/profiling evidence or a broader graph executor.
+
 ### H3: Tile-based fused matmul epilogues
 
 Replace generic fused matmul CUDA strings with a shape-gated tiled kernel layer
