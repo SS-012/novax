@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 96
+- Logged rows: 97
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 95
-- Unique non-baseline experiment commits: 94
+- Experiment evaluations after baseline: 96
+- Unique non-baseline experiment commits: 95
 - Currently successful unique experiments: 17
 - Strict benchmark-qualified performance successes: 4
-- Currently discarded or reverted unique experiments: 77
+- Currently discarded or reverted unique experiments: 78
 
 Definitions:
 
@@ -340,6 +340,13 @@ improved the intended rows but failed with score `-448.210483`, 3
 improvements, and 5 focused regressions. The change was reverted; even exact
 small fused-mm variants need autotuned scheduling or a true Tensor Core
 epilogue path, not another static 16x16 tile.
+Experiment `91b30af` skipped redundant broadcast-index expression rewriting
+inside `launch_fused` when every input already had the output size. Correctness
+passed, but the benchmark failed with score `-695.614080`, 2 focused
+improvements, and 3 focused regressions. The best improvement was unrelated
+`matmul_1024x1024_x_1024x1024`; the intended fusion rows did not produce a
+saved-best win. The change was reverted. Python-side fused-launch cleanups
+remain below the current noise floor unless they qualify repeatedly.
 Experiment `81fe1de` used 256-thread blocks only for ReLU-only fused
 elementwise expressions, leaving `expf`/`tanhf` chains on the current block
 choice. Correctness passed, but the benchmark failed with score `-124.063579`,
@@ -452,6 +459,7 @@ These experiments should not be retried in the same form.
 | `1bf272a` | discard | Direct global-memory exact 64x64 matmul regressed the target row on confirmation. |
 | `bea1152` | discard | Exact repeated-inference rectangular cuBLAS improved capture once but regressed seven focused rows. |
 | `2211a84` | discard | Exact 128 zero-bias fused-mm improved target rows but failed confirmation with five focused regressions. |
+| `91b30af` | discard | Skipping same-size fused broadcast rewriting produced no target fused-path win. |
 
 ## Full Experiment Ledger
 
@@ -553,6 +561,7 @@ These experiments should not be retried in the same form.
 | `1bf272a` | discard | no | 1 | 7 | 0 | -2305.804106 | 0.593476 | Direct global-memory exact 64x64 matmul regressed the target row on confirmation. |
 | `bea1152` | discard | no | 2 | 7 | 0 | -3007.831691 | 0.550459 | Exact repeated-inference rectangular cuBLAS improved capture once but regressed seven focused rows. |
 | `2211a84` | discard | no | 3 | 5 | 0 | -448.210483 | 0.553269 | Exact 128 zero-bias fused-mm improved target rows but failed confirmation with five focused regressions. |
+| `91b30af` | discard | no | 2 | 3 | 0 | -695.614080 | 0.595810 | Skipping same-size fused broadcast rewriting produced no target fused-path win. |
 
 ## Future Research Directions
 

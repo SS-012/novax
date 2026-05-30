@@ -31,6 +31,8 @@ elementwise or activation case. Keep those cases as guardrails.
 | [CudaForge: An Agent Framework with Hardware Feedback for CUDA Kernel Optimization](https://arxiv.org/abs/2511.01884) | The agent loop explicitly combines candidate generation, correctness checks, hardware feedback such as Nsight Compute metrics, and repeated improvement. | NovaX should start attaching profiler counters to repeated failures around fused-mm and exact small GEMM; static edits are not enough once the target is near the noise floor. |
 | [CUDA Agent: Large-Scale Agentic RL for High-Performance CUDA Kernel Generation](https://arxiv.org/abs/2602.24286) | The frontier is moving toward learned CUDA optimization skill with reliable verification and profiling rewards, not one-off prompt guesses. | Keep the autoresearch loop strict: correctness, focused latency, and regression guardrails should define reward. Longer-term, collect failed variants as training/search data. |
 | [KernelBlaster: Continual Cross-Task CUDA Optimization via Memory-Augmented In-Context Reinforcement Learning](https://arxiv.org/abs/2602.14293) | A 2026 agentic CUDA optimizer stores prior optimization attempts in a persistent knowledge base and uses them to guide future edits. | NovaX should treat `autoresearch/results.tsv`, benchmark artifacts, and this paper log as memory: each failure should constrain the next search rather than being rediscovered. |
+| [Model2Kernel: Model-Aware Symbolic Execution For Safe CUDA Kernels](https://arxiv.org/abs/2603.24595) | Recent kernel work emphasizes that model-specific shapes make CUDA memory safety subtle enough to require automated checking. | As NovaX moves toward generated or shape-specialized kernels, correctness tests need to expand with shape and bounds coverage; exact-shape kernels are fast but brittle. |
+| [FlipFlop: A Static Analysis-based Energy Optimization Framework for GPU Kernels](https://arxiv.org/abs/2601.13345) | Static PTX analysis can narrow block-size choices and find throughput/power tradeoffs before exhaustive runtime search. | Future NovaX block-size experiments should be explicit autotune/profile sweeps, not isolated guesses like the failed 256-thread and coarsened fused kernels. |
 | [Astra: A Multi-Agent System for GPU Kernel Performance Optimization](https://arxiv.org/abs/2509.07506) | Starting from existing CUDA kernels and iteratively applying loop transformations, memory-access changes, intrinsics, and fast math is a viable optimization workflow. | NovaX experiments should mutate the existing hot CUDA strings in small verifiable steps, but only keep transformations that survive full focused-suite validation. |
 | [KernelAgent: Hardware-Guided GPU Kernel Optimization via Multi-Agent Orchestration](https://pytorch.org/blog/kernelagent-hardware-guided-gpu-kernel-optimization-via-multi-agent-orchestration/) | PyTorch's 2026 hardware-guided loop emphasizes profiler-derived bottleneck diagnosis before proposing kernel changes. | NovaX should increasingly attach profiling notes to experiments; pure Python launch-source caching can look plausible but still sit below benchmark noise. |
 | [TileLang: A Composable Tiled Programming Model for AI Systems](https://arxiv.org/abs/2504.17577) | Separating dataflow from scheduling gives a usable way to express tiled kernels while leaving thread binding, layout, tensorization, and pipelining tunable. | A future NovaX backend could generate TileLang/Triton-like kernels from focused graph patterns instead of hand-authoring each CUDA kernel. |
@@ -370,6 +372,12 @@ Experiment note:
   "uses Tensor Cores" is not the same as "is a competitive GEMM kernel." Future
   generated fused-mm work should start from CUTLASS-style tiling or an autotune
   search space, not a single static warp tile.
+- `91b30af` skipped redundant same-size broadcast expression rewriting in
+  `launch_fused`. Correctness passed, but the intended fusion rows did not
+  improve versus the saved best and the focused gate failed. This reinforces
+  the Hybrid JIT-CUDA Graph and KernelBlaster lesson: NovaX should stop
+  spending main-loop budget on Python string/dispatch micro-cleanups unless
+  profiling shows they dominate a focused target.
 
 ## Things Not To Repeat Blindly
 
@@ -423,3 +431,5 @@ Experiment note:
   focused rows, including square matmul.
 - Exact zero-bias `128x256x128` fused-mm through another static 16x16 SIMT
   tile; it improved target rows but still failed focused confirmation.
+- Same-size fused broadcast-rewrite skipping as a standalone Python-side
+  cleanup; it produced no target fused-path win under the focused gate.
