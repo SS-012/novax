@@ -33,6 +33,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [CUDA-L2: Surpassing cuBLAS Performance for Matrix Multiplication through Reinforcement Learning](https://arxiv.org/abs/2512.02551) | The strongest matmul results come from automated search across a large kernel configuration space with measured execution speed as the reward. | NovaX should not expect static hand tweaks to beat cuBLAS/PyTorch broadly; serious matmul wins need a shape-keyed autotuning loop or vendor-library plan cache. |
 | [OptiML: An End-to-End Framework for Program Synthesis and CUDA Kernel Optimization](https://arxiv.org/abs/2602.12305) | Kernel optimization is framed as search under verification, with profiler-aware rewards guiding edits. | Fast-math substitutions should be treated as benchmarked candidates, not assumed wins; NovaX needs confirmation runs and correctness/latency gates for approximate math. |
 | [FlashFuser: Expanding the Scale of Kernel Fusion for Compute-Intensive Operators via Inter-Core Connection](https://arxiv.org/abs/2512.12949) | Large fusion wins come from reducing memory traffic with hardware-aware data movement and scheduling, not just syntactically combining operators. | NovaX's fused-mm edge needs a real tiled epilogue/fusion strategy; descriptor or stream-state micro-caching is unlikely to be enough. |
+| [CODA: Rewriting Transformer Blocks as GEMM-Epilogue Programs](https://arxiv.org/abs/2605.19269) | A 2026 result argues that many memory-bound transformer side operations should execute as composable GEMM epilogues while GEMM output tiles are still on chip. | NovaX's fused-mm path should move toward true GEMM-epilogue fusion, not GEMM followed by a separate epilogue kernel. |
 | [Dissecting the NVIDIA Blackwell Architecture with Microbenchmarks](https://arxiv.org/abs/2507.10789) | Blackwell exposes major performance through newer Tensor Core paths and memory hierarchy behavior; kernel choices must map to those hardware units. | For square GEMM, NovaX should prefer vendor Tensor Core math modes over hand-written FP32 CUDA tiles when accuracy policy allows it. |
 | [Microbenchmark-Driven Analytical Performance Modeling Across Modern GPU Architectures](https://arxiv.org/abs/2605.04178) | Modern GPU performance work benefits from microbenchmark-grounded models of Tensor Cores and memory hierarchy rather than generic rules of thumb. | When NovaX sees a shape-stable GEMM case, first test hardware-backed library modes and shape gates before writing another kernel. |
 | [Nautilus: An Auto-Scheduling Tensor Compiler for Efficient Tiled GPU Kernels](https://arxiv.org/abs/2604.14825) | A 2026 tensor compiler result shows that expression rewrites, high-level transformations, and tile optimizations need to be searched jointly rather than hand-applied one at a time. | NovaX's next meaningful gains likely need a small IR plus scheduler/autotuner; isolated hand-specialized kernels have repeatedly failed the focused gate. |
@@ -132,6 +133,12 @@ Experiment note:
   precision-sensitive test path on default math. This supports the hardware
   mapping lesson: for stable square GEMM, using Tensor Core-capable vendor
   modes beats another static CUDA tile.
+- `9f22443` routed the larger fused matmul+bias+ReLU case through TF32 cuBLAS
+  followed by an in-place epilogue kernel. It improved the intended fused-mm
+  target and qualified once, but failed two of three runs. This supports CODA's
+  lesson: the next serious fused-mm attempt needs a true GEMM epilogue while
+  accumulator tiles are still hot, likely via cuBLASLt/CUTLASS-style epilogues
+  with cached descriptors, not a separate launch.
 
 ### H4: GPU-resident MLP backward, gated narrowly
 
@@ -195,6 +202,7 @@ Experiment note:
 - cuBLAS state micro-caching unless the matmul or fused-mm targets themselves
   improve.
 - Static fused-mm tile changes without profiling or an autotune search.
+- GEMM plus a separate epilogue launch as a substitute for true epilogue fusion.
 - Fast-math substitutions without repeatable target-case wins.
 - Softmax fast-math changes that do not improve the softmax benchmark itself.
 - GPU backward rewrites that touch unrelated eager/autograd behavior.

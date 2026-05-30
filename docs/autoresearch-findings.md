@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 72
+- Logged rows: 73
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 71
-- Unique non-baseline experiment commits: 70
+- Experiment evaluations after baseline: 72
+- Unique non-baseline experiment commits: 71
 - Currently successful unique experiments: 15
 - Strict benchmark-qualified performance successes: 2
-- Currently discarded or reverted unique experiments: 55
+- Currently discarded or reverted unique experiments: 56
 
 Definitions:
 
@@ -180,6 +180,11 @@ confirmation run. The primary run improved six focused cases, with the largest
 wins on `matmul_512x512_x_512x512` (1.59x), `matmul_1024x1024_x_1024x1024`
 (1.52x), and `matmul_256x256_x_256x256` (1.23x). This is the first strict
 qualified kept performance win since CUDA graph replay.
+Experiment `9f22443` routed the larger fused matmul+bias+ReLU primitive through
+TF32 cuBLAS and an in-place bias+ReLU epilogue. It reliably improved the larger
+fused-mm target, including a 1.38x `fused_mm_linear_256_512_256` win, but it
+qualified only once across three benchmark runs. Because two runs exceeded the
+focused regression budget, it was reverted.
 
 ## Successful Experiments Kept
 
@@ -262,6 +267,7 @@ These experiments should not be retried in the same form.
 | `c5e8268` | discard | A 16x32 rectangular fused-mm tile passed correctness but produced zero focused improvements and eight regressions. |
 | `5626de1` | discard | Capturing all repeated inference passes into one graph improved capture twice but failed the focused regression gate twice. |
 | `a8d9886` | discard | Fast `__expf` in fused sigmoid chains improved `fusion_chain5` once but failed confirmation and the focused gate. |
+| `9f22443` | discard | TF32 cuBLAS plus in-place epilogue improved large fused-mm targets but qualified only once across three runs. |
 
 ## Full Experiment Ledger
 
@@ -339,6 +345,7 @@ These experiments should not be retried in the same form.
 | `5626de1` | discard | no | 1 | 4 | 0 | -666.673293 | 0.677285 | Repeated inference graph capture improved captured inference twice but failed focused regression gate on both runs. |
 | `a8d9886` | discard | no | 1 | 4 | 0 | -1549.618580 | 0.666400 | Fast __expf for fused sigmoid chains improved fusion_chain5 once but failed confirmation and focused regression gate. |
 | `0c8c0ac` | keep | yes | 6 | 2 | 0 | 661.399441 | 0.622541 | Enabled TF32 tensor math for square cuBLAS matmul and qualified twice with large focused matmul wins. |
+| `9f22443` | discard | no | 4 | 3 | 0 | 171.899694 | 0.610088 | Large fused-mm through TF32 cuBLAS improved target cases but qualified only once across three runs. |
 
 ## Future Research Directions
 
