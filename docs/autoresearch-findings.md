@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 80
+- Logged rows: 81
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 79
-- Unique non-baseline experiment commits: 78
+- Experiment evaluations after baseline: 80
+- Unique non-baseline experiment commits: 79
 - Currently successful unique experiments: 16
 - Strict benchmark-qualified performance successes: 3
-- Currently discarded or reverted unique experiments: 62
+- Currently discarded or reverted unique experiments: 63
 
 Definitions:
 
@@ -235,6 +235,12 @@ improvements and zero focused regressions, including better fusion and captured
 inference rows. Confirmation and tiebreaker both failed the gate, however, with
 `fusion_chain5_n1000000` regressing in the tiebreaker. The code was reverted:
 source-construction caching is too small/noisy unless it qualifies repeatedly.
+Experiment `5eb4d27` used 256-thread blocks for fused expressions containing
+`expf` or `tanhf`, targeting `fusion_chain5_n1000000`. It failed both benchmark
+runs. The first run missed the focused gate with score `-141.997612`; the
+confirmation run worsened to `-1504.574923` and regressed
+`fusion_chain3_n1000000` by 1.47x. Transcendental block-size changes need
+profiling evidence before another retry.
 
 ## Successful Experiments Kept
 
@@ -325,6 +331,7 @@ These experiments should not be retried in the same form.
 | `53d31b8` | discard | Exact-tile fused matmul removed boundary checks but failed to improve fused-mm enough and missed the focused gate. |
 | `c7f15d8` | discard | Dispatching exact 64 matmul before cuBLAS improved 64x64 twice but failed the focused gate twice. |
 | `2a90d48` | discard | Caching fused launch kernels qualified once but failed confirmation and tiebreaker. |
+| `5eb4d27` | discard | Smaller fused-transcendental blocks failed twice and regressed fusion-chain guardrails. |
 
 ## Full Experiment Ledger
 
@@ -410,6 +417,7 @@ These experiments should not be retried in the same form.
 | `d610a5c` | keep | yes | 3 | 2 | 0 | 213.689073 | 0.615337 | Exact 64x64 matmul specialization qualified twice and improved the focused small-matmul path. |
 | `c7f15d8` | discard | no | 2 | 3 | 0 | -971.796502 | 0.638130 | Dispatch exact 64 matmul before cuBLAS improved 64x64 twice but failed the focused gate twice. |
 | `2a90d48` | discard | no | 3 | 1 | 0 | -85.075841 | 0.602476 | Fused launch kernel caching qualified once but failed confirmation and tiebreaker, so it was reverted. |
+| `5eb4d27` | discard | no | 2 | 2 | 0 | -141.997612 | 0.612282 | Smaller blocks for fused transcendental kernels failed twice and regressed fusion-chain guardrails. |
 
 ## Future Research Directions
 

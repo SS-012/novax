@@ -252,6 +252,10 @@ Experiment note:
   confirmation and tiebreaker. This supports the KernelAgent/AutoKernel lesson:
   optimization turns should prioritize profiled bottlenecks over plausible
   Python-cache edits once timings are near the noise floor.
+- `5eb4d27` changed fused kernels containing `expf`/`tanhf` to use 256-thread
+  blocks. It failed twice and regressed fusion-chain guardrails. This supports
+  the TritonForge/KernelAgent lesson: block-size scheduling should be driven by
+  profiler counters or an explicit autotune sweep, not a static guess.
 
 ## Things Not To Repeat Blindly
 
@@ -274,3 +278,5 @@ Experiment note:
   row itself improves.
 - Fused launch-source caching without profiling evidence and repeatable focused
   qualification.
+- Static fused-transcendental block-size changes without profiler evidence or
+  an autotune sweep.
