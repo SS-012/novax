@@ -100,6 +100,11 @@ Experiment note:
   by about 1.19x to 1.23x, but failed the focused regression gate on rerun.
   Next attempt should avoid the separate epilogue launch, likely through
   cuBLASLt/CUTLASS-style fused epilogues or a better tile kernel.
+- `1b04e93` tested a real cuBLASLt `RELU_BIAS` fused epilogue. Correctness
+  passed and the 256 fused-mm cases improved, but the focused gate still failed
+  with 7 regressions. The next vendor-kernel attempt should cache planning more
+  aggressively or move to a persistent shape-specific wrapper outside the hot
+  Python loop; otherwise the descriptor/heuristic surface eats the win.
 
 ### H4: GPU-resident MLP backward, gated narrowly
 

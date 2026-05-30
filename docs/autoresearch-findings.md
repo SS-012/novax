@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 64
+- Logged rows: 65
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 63
-- Unique non-baseline experiment commits: 62
+- Experiment evaluations after baseline: 64
+- Unique non-baseline experiment commits: 63
 - Currently successful unique experiments: 14
 - Strict benchmark-qualified performance successes: 1
-- Currently discarded or reverted unique experiments: 48
+- Currently discarded or reverted unique experiments: 49
 
 Definitions:
 
@@ -132,6 +132,11 @@ Experiment `c830f9a` rechecked prepared PyCUDA calls under the new focused
 metric. It produced no focused improvements and regressed fusion, capture, and
 matmul cases, so prepared launch dispatch remains a poor fit for NovaX's focused
 edge.
+Experiment `1b04e93` implemented a real cuBLASLt `RELU_BIAS` fused epilogue for
+large fused-mm shapes. Correctness passed and the target 256 fused-mm cases
+improved, but the run still failed with 7 focused regressions. The likely
+problem is not epilogue correctness; it is descriptor/heuristic overhead and
+shape noise inside the hot benchmark loop.
 
 ## Successful Experiments Kept
 
@@ -206,6 +211,7 @@ These experiments should not be retried in the same form.
 | `4b6e3a3` | discard | Specialized direct build for `sqrt(abs)` fusion did not improve the target case and failed the broad gate. |
 | `86de151` | discard | Large fused matmul through cuBLAS improved the 256 fused-mm cases but failed the focused regression budget on rerun. |
 | `c830f9a` | discard | Prepared PyCUDA launches produced no focused improvements and regressed fusion, capture, and matmul cases. |
+| `1b04e93` | discard | cuBLASLt fused bias+ReLU epilogue improved the 256 fused-mm cases and capture but regressed too many focused cases. |
 
 ## Full Experiment Ledger
 
@@ -275,6 +281,7 @@ These experiments should not be retried in the same form.
 | `4b6e3a3` | discard | no | 3 | 13 | 0 | -2088.905177 | 1.075438 | Specialized direct build for sqrt_abs fusion did not improve target case and failed broad gate. |
 | `86de151` | discard | no | 2 | 7 | 0 | -1088.266039 | 0.674881 | Focused large fused matmul through cuBLAS improved 256 fused-mm cases but failed focused regression budget on rerun. |
 | `c830f9a` | discard | no | 0 | 6 | 0 | -1324.696890 | 0.701902 | Prepared elementwise launches produced no focused improvements and regressed fusion capture and matmul cases. |
+| `1b04e93` | discard | no | 3 | 7 | 0 | -1642.789714 | 0.670079 | cuBLASLt fused bias relu epilogue improved 256 fused-mm and capture but regressed too many focused cases. |
 
 ## Future Research Directions
 
