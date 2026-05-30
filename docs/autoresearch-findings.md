@@ -1,17 +1,17 @@
 # NovaX Autoresearch Findings
 
 This document summarizes the NovaX GPU optimization research logged in
-`autoresearch/results.tsv` as of May 27, 2026.
+`autoresearch/results.tsv` as of May 30, 2026.
 
 ## Count Summary
 
-- Logged rows: 67
+- Logged rows: 68
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 66
-- Unique non-baseline experiment commits: 65
+- Experiment evaluations after baseline: 67
+- Unique non-baseline experiment commits: 66
 - Currently successful unique experiments: 14
 - Strict benchmark-qualified performance successes: 1
-- Currently discarded or reverted unique experiments: 51
+- Currently discarded or reverted unique experiments: 52
 
 Definitions:
 
@@ -145,6 +145,12 @@ Experiment `77ed4e7` added a batched `CUDAGraph.replay_many()` API and routed
 the captured-inference benchmark through it. The run failed the focused score
 and captured inference was slower than the saved best, so Python-level replay
 batching is not enough to improve the graph path.
+Experiment `9a904b1` cached the cuBLAS stream binding to avoid a repeated
+`cublasSetStream` ctypes call on stable square-GEMM paths. It improved captured
+inference in the single run, but five focused cases regressed, including the
+128 fused-mm linear case and multiple square matmul cases. The result suggests
+that this call is not the dominant hot-path cost, and that cuBLAS state tweaks
+are too noisy unless they improve the matmul/fused-mm targets directly.
 
 ## Successful Experiments Kept
 
@@ -222,6 +228,7 @@ These experiments should not be retried in the same form.
 | `1b04e93` | discard | cuBLASLt fused bias+ReLU epilogue improved the 256 fused-mm cases and capture but regressed too many focused cases. |
 | `1086ca8` | discard | Specialized fixed kernels for the focused fusion chains did not improve fusion enough and failed the focused gate. |
 | `77ed4e7` | discard | Batched CUDA graph replay in Python did not improve captured inference and failed the focused score gate. |
+| `9a904b1` | discard | Cached cuBLAS stream binding improved captured inference only, while regressing five focused cases. |
 
 ## Full Experiment Ledger
 
@@ -294,6 +301,7 @@ These experiments should not be retried in the same form.
 | `1b04e93` | discard | no | 3 | 7 | 0 | -1642.789714 | 0.670079 | cuBLASLt fused bias relu epilogue improved 256 fused-mm and capture but regressed too many focused cases. |
 | `1086ca8` | discard | no | 2 | 3 | 0 | -826.233543 | 0.706146 | Specialized focused fusion-chain kernels did not improve fusion enough and failed focused gate. |
 | `77ed4e7` | discard | no | 2 | 2 | 0 | -192.839153 | 0.696145 | Batched cuda graph replay API did not improve capture and failed focused research score. |
+| `9a904b1` | discard | no | 1 | 5 | 0 | -4158.420902 | 0.688372 | Cached cuBLAS stream binding improved captured inference but regressed five focused cases including fused-mm and matmul. |
 
 ## Future Research Directions
 

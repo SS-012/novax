@@ -30,6 +30,8 @@ elementwise or activation case. Keep those cases as guardrails.
 | [CUDA-LLM: LLMs Can Write Efficient CUDA Kernels](https://arxiv.org/abs/2506.09092) | Automated CUDA generation works better when correctness, compile success, and measured latency are jointly optimized through feedback. | Treat NovaX autoresearch as a feedback loop: generate one small kernel idea, run correctness, benchmark focused cases, log result, then revise. |
 | [TritonForge: Profiling-Guided Framework for Automated Triton Kernel Optimization](https://arxiv.org/abs/2512.09196) | Profiling-guided iterative transformations are a practical path toward better Triton kernels. Runtime measurements drive the next edit. | Add optional profiling artifacts to future loops, especially for fusion and fused matmul cases, so changes target measured stalls rather than guesses. |
 | [ParallelKittens: Systematic and Practical Simplification of Multi-GPU AI Kernels](https://arxiv.org/abs/2511.13940) | Multi-GPU performance depends heavily on overlapping communication, scheduling, and data-transfer primitives. | Not an immediate single-GPU benchmark target, but relevant if NovaX expands beyond one GPU. |
+| [CUDA-L2: Surpassing cuBLAS Performance for Matrix Multiplication through Reinforcement Learning](https://arxiv.org/abs/2512.02551) | The strongest matmul results come from automated search across a large kernel configuration space with measured execution speed as the reward. | NovaX should not expect static hand tweaks to beat cuBLAS/PyTorch broadly; serious matmul wins need a shape-keyed autotuning loop or vendor-library plan cache. |
+| [FlashFuser: Expanding the Scale of Kernel Fusion for Compute-Intensive Operators via Inter-Core Connection](https://arxiv.org/abs/2512.12949) | Large fusion wins come from reducing memory traffic with hardware-aware data movement and scheduling, not just syntactically combining operators. | NovaX's fused-mm edge needs a real tiled epilogue/fusion strategy; descriptor or stream-state micro-caching is unlikely to be enough. |
 | [Nautilus: An Auto-Scheduling Tensor Compiler for Efficient Tiled GPU Kernels](https://arxiv.org/abs/2604.14825) | A 2026 tensor compiler result shows that expression rewrites, high-level transformations, and tile optimizations need to be searched jointly rather than hand-applied one at a time. | NovaX's next meaningful gains likely need a small IR plus scheduler/autotuner; isolated hand-specialized kernels have repeatedly failed the focused gate. |
 | [Hybrid JIT-CUDA Graph Optimization for Low-Latency Large Language Model Inference](https://arxiv.org/abs/2604.23467) | High-performance low-latency inference partitions static work into CUDA Graph replay and dynamic work into JIT-compiled kernels, reducing launch overhead and latency variance. | NovaX should keep pushing static graph replay, but pure Python replay loops are unlikely to be enough; the replay loop needs to move lower than Python or be amortized by larger captured regions. |
 
@@ -153,11 +155,18 @@ Experiment note:
   benchmark to use it. The focused gate still failed and captured inference was
   slower than the saved best. This supports the hybrid JIT/CUDA Graph lesson:
   replay batching needs to move below Python or capture larger regions.
+- `9a904b1` cached the cuBLAS stream binding so stable square-GEMM calls would
+  skip repeated `cublasSetStream` ctypes calls. It improved captured inference
+  only, while regressing five focused cases. This supports the CUDA-L2 and
+  FlashFuser lesson: matmul/fused-mm progress needs searched kernel plans or
+  real fusion dataflow changes, not small library state micro-caches.
 
 ## Things Not To Repeat Blindly
 
 - Broad eager elementwise micro-optimizations without a focused-path win.
 - General rectangular cuBLAS routing without shape gates.
+- cuBLAS state micro-caching unless the matmul or fused-mm targets themselves
+  improve.
 - Softmax fast-math changes that do not improve the softmax benchmark itself.
 - GPU backward rewrites that touch unrelated eager/autograd behavior.
 - CUDA graph replay micro-tweaks unless captured inference itself improves.
