@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 91
+- Logged rows: 92
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 90
-- Unique non-baseline experiment commits: 89
+- Experiment evaluations after baseline: 91
+- Unique non-baseline experiment commits: 90
 - Currently successful unique experiments: 17
 - Strict benchmark-qualified performance successes: 4
-- Currently discarded or reverted unique experiments: 72
+- Currently discarded or reverted unique experiments: 73
 
 Definitions:
 
@@ -304,6 +304,13 @@ benchmark failed with score `-1813.882196`; both fusion-chain rows regressed,
 and `fusion_chain3_n1000000` became slower than PyTorch. The current fused
 elementwise edge depends on occupancy and compiler scheduling more than on
 simply reducing thread count.
+Experiment `1765103` cached each large same-size fused-kernel input into a
+local scalar before evaluating the generated expression, aiming to avoid
+repeated `x0[idx]` loads in `fusion_chain5`. Correctness passed, but the
+benchmark failed with score `-2075.237661`, 3 focused improvements, and 7
+focused regressions. `fusion_chain5_n1000000` was 1.74x the saved best. The
+compiler likely already handled the profitable reuse, or the extra locals
+increased register pressure enough to lose occupancy.
 Experiment `81fe1de` used 256-thread blocks only for ReLU-only fused
 elementwise expressions, leaving `expf`/`tanhf` chains on the current block
 choice. Correctness passed, but the benchmark failed with score `-124.063579`,
@@ -411,6 +418,7 @@ These experiments should not be retried in the same form.
 | `ff3a8ac` | discard | Exact cuBLASLt ReLU epilogue qualified once but failed confirmation with fusion-chain regressions. |
 | `7c5ff68` | discard | Exact TF32 WMMA fused-mm ReLU kernel produced a small target win but missed the focused score gate. |
 | `a4120d8` | discard | Coarsening large fused elementwise kernels regressed both fusion-chain rows. |
+| `1765103` | discard | Caching large fused-kernel inputs in locals regressed `fusion_chain5` and failed the focused gate. |
 
 ## Full Experiment Ledger
 
@@ -507,6 +515,7 @@ These experiments should not be retried in the same form.
 | `ff3a8ac` | discard | no | 4 | 5 | 0 | -1353.747557 | 0.577248 | Exact cuBLASLt ReLU epilogue qualified once but failed confirmation with fusion-chain regressions. |
 | `7c5ff68` | discard | no | 2 | 1 | 0 | -4.118719 | 0.585784 | Exact TF32 WMMA fused-mm ReLU kernel produced a small target win but missed the focused score gate. |
 | `a4120d8` | discard | no | 2 | 4 | 0 | -1813.882196 | 0.645422 | Coarsening large fused elementwise kernels regressed both fusion-chain rows. |
+| `1765103` | discard | no | 3 | 7 | 0 | -2075.237661 | 0.597707 | Caching large fused-kernel inputs in locals regressed `fusion_chain5` and failed the focused gate. |
 
 ## Future Research Directions
 

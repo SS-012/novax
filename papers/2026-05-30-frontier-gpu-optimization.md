@@ -323,6 +323,12 @@ Experiment note:
   rows regressed and `fusion_chain3_n1000000` lost to PyTorch. This supports
   the FuseFlow/Nautilus lesson: profitable fusion is a scheduling/dataflow
   problem, not a simple thread-count reduction.
+- `1765103` cached large same-size fused-kernel inputs into local scalars to
+  avoid repeated global-load syntax in expressions like
+  `sigmoid(relu(a*b+c)*a)`. Correctness passed, but `fusion_chain5_n1000000`
+  regressed hard and seven focused rows failed. This reinforces the
+  compiler/autotuning lesson: local source rewrites can increase register
+  pressure or block compiler choices even when they look like obvious CSE.
 - `ff3a8ac` validated that exact cuBLASLt ReLU epilogues can run correctly in
   NovaX, but its confirmation benchmark failed despite a primary qualification.
   The new lesson is not "avoid cuBLASLt"; it is "do not put cuBLASLt descriptor
@@ -370,6 +376,8 @@ Experiment note:
   autotune loop or profiler evidence.
 - Coarsening fused elementwise kernels by having each thread compute four
   outputs without a scheduler/autotune signal.
+- Manual local-input caching in fused elementwise source strings without
+  profiler evidence; it regressed the exact chain it was meant to help.
 - Python/ctypes cuBLASLt epilogue setup in the hot fused-mm path without a
   persistent lower-level plan cache or generated kernel.
 - One-warp-per-output-tile WMMA fused-mm kernels without shared-memory staging,
