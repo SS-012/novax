@@ -743,34 +743,7 @@ def launch_matmul_bias_relu(x, w, bias):
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
 
     TILE = 16
-    if M % TILE == 0 and K % TILE == 0 and N % TILE == 0:
-        kernel_src = f"""
-    #define TILE_SIZE {TILE}
-    __global__ void matmul_bias_relu_exact16_kernel(
-        const float* X, const float* W, const float* B, float* C,
-        int M, int K, int N
-    ) {{
-        __shared__ float Xs[TILE_SIZE][TILE_SIZE];
-        __shared__ float Ws[TILE_SIZE][TILE_SIZE];
-        int row = blockIdx.y * TILE_SIZE + threadIdx.y;
-        int col = blockIdx.x * TILE_SIZE + threadIdx.x;
-        float acc = 0.0f;
-        for (int t = 0; t < K / TILE_SIZE; t++) {{
-            Xs[threadIdx.y][threadIdx.x] = X[row * K + t * TILE_SIZE + threadIdx.x];
-            Ws[threadIdx.y][threadIdx.x] = W[(t * TILE_SIZE + threadIdx.y) * N + col];
-            __syncthreads();
-            #pragma unroll
-            for (int k = 0; k < TILE_SIZE; k++)
-                acc += Xs[threadIdx.y][k] * Ws[k][threadIdx.x];
-            __syncthreads();
-        }}
-        float val = acc + B[col];
-        C[row * N + col] = fmaxf(0.0f, val);
-    }}
-    """
-        kernel_name = "matmul_bias_relu_exact16_kernel"
-    else:
-        kernel_src = f"""
+    kernel_src = f"""
     #define TILE_SIZE {TILE}
     __global__ void matmul_bias_relu_kernel(
         const float* X, const float* W, const float* B, float* C,
@@ -787,7 +760,6 @@ def launch_matmul_bias_relu(x, w, bias):
             Ws[threadIdx.y][threadIdx.x] = (col < N && t * TILE_SIZE + threadIdx.y < K)
                 ? W[(t * TILE_SIZE + threadIdx.y) * N + col] : 0.0f;
             __syncthreads();
-            #pragma unroll
             for (int k = 0; k < TILE_SIZE; k++)
                 acc += Xs[threadIdx.y][k] * Ws[k][threadIdx.x];
             __syncthreads();
@@ -798,8 +770,7 @@ def launch_matmul_bias_relu(x, w, bias):
         }}
     }}
     """
-        kernel_name = "matmul_bias_relu_kernel"
-    func = get_kernel(kernel_name, kernel_src)
+    func = get_kernel("matmul_bias_relu_kernel", kernel_src)
     out_gpu = mempool.alloc(M * N * 4)
     block = (TILE, TILE, 1)
     grid = ((N + TILE - 1) // TILE, (M + TILE - 1) // TILE, 1)
