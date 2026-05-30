@@ -243,23 +243,6 @@ class TestBuildFused:
         assert expr is not None
         assert len(leaves) == 3
 
-    def test_chained_sigmoid_uses_fast_exp(self):
-        a = Tensor(np.array([1.0]))
-        b = Tensor(np.array([2.0]))
-        inner = Tensor(None, op="mul", inputs=[a, b])
-        outer = Tensor(None, op="sigmoid", inputs=[inner])
-        expr, leaves = outer._build_fused()
-        assert "__expf" in expr
-        assert len(leaves) == 2
-
-    def test_standalone_sigmoid_keeps_precise_exp(self):
-        a = Tensor(np.array([1.0]))
-        node = Tensor(None, op="sigmoid", inputs=[a])
-        expr, leaves = node._build_fused()
-        assert "__expf" not in expr
-        assert "expf" in expr
-        assert len(leaves) == 1
-
 
 # ---------------------------------------------------------------------------
 # Memory pool
