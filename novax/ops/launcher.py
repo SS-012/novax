@@ -742,11 +742,15 @@ def launch_matmul_bias_relu(x, w, bias):
     assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
 
+    zero_bias = getattr(bias, "_is_all_zero", False)
     TILE = 16
+    op_name = "matmul_relu_zero_bias_kernel" if zero_bias else "matmul_bias_relu_kernel"
+    bias_param = "" if zero_bias else ", const float* B"
+    bias_expr = "acc" if zero_bias else "acc + B[col]"
     kernel_src = f"""
     #define TILE_SIZE {TILE}
-    __global__ void matmul_bias_relu_kernel(
-        const float* X, const float* W, const float* B, float* C,
+    __global__ void {op_name}(
+        const float* X, const float* W{bias_param}, float* C,
         int M, int K, int N
     ) {{
         __shared__ float Xs[TILE_SIZE][TILE_SIZE];
@@ -765,20 +769,25 @@ def launch_matmul_bias_relu(x, w, bias):
             __syncthreads();
         }}
         if (row < M && col < N) {{
-            float val = acc + B[col];
+            float val = {bias_expr};
             C[row * N + col] = fmaxf(0.0f, val);
         }}
     }}
     """
-    func = get_kernel("matmul_bias_relu_kernel", kernel_src)
+    func = get_kernel(op_name, kernel_src)
     out_gpu = mempool.alloc(M * N * 4)
     block = (TILE, TILE, 1)
     grid = ((N + TILE - 1) // TILE, (M + TILE - 1) // TILE, 1)
 
     stream = _get_stream()
-    func(x.gpu_ptr, w.gpu_ptr, bias.gpu_ptr, out_gpu,
-         np.int32(M), np.int32(K), np.int32(N),
-         block=block, grid=grid, stream=stream)
+    if zero_bias:
+        func(x.gpu_ptr, w.gpu_ptr, out_gpu,
+             np.int32(M), np.int32(K), np.int32(N),
+             block=block, grid=grid, stream=stream)
+    else:
+        func(x.gpu_ptr, w.gpu_ptr, bias.gpu_ptr, out_gpu,
+             np.int32(M), np.int32(K), np.int32(N),
+             block=block, grid=grid, stream=stream)
 
     Tensor = _get_tensor_cls()
     result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])

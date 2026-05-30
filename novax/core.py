@@ -77,6 +77,7 @@ class Tensor:
         self.grad = None
         self._backward = lambda: None
         self._prev: set = set()
+        self._is_all_zero = False
 
         # --- scalar / constant ---
         self.is_constant = False
@@ -88,6 +89,7 @@ class Tensor:
             self.size = 1
             self.dtype = np.float32
             self.data = np.array([data], dtype=np.float32)
+            self._is_all_zero = float(data) == 0.0
             self.gpu_ptr = None
             self.on_gpu = False
             self.is_leaf = True
@@ -135,6 +137,7 @@ class Tensor:
                 self.data = data.astype(np.float32)
             else:
                 self.data = np.array(data, dtype=np.float32)
+            self._is_all_zero = bool(self.data.size and np.count_nonzero(self.data) == 0)
             self.shape = self.data.shape
             self.dtype = self.data.dtype
             self.size = self.data.size
@@ -144,6 +147,7 @@ class Tensor:
     # ------------------------------------------------------------------
 
     def _to_gpu(self):
+        self._is_all_zero = bool(self.data.size and np.count_nonzero(self.data) == 0)
         self.gpu_ptr = mempool.alloc(self.data.nbytes)
         cuda.memcpy_htod(self.gpu_ptr, self.data)
         self.data = None
