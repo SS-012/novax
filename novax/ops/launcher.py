@@ -26,10 +26,6 @@ _CUBLAS_OP_N = 0
 _CUBLAS_DEFAULT_MATH = 0
 _CUBLAS_TF32_TENSOR_OP_MATH = 3
 _cublas_math_mode = None
-_CUBLAS_ALPHA_ONE = ctypes.c_float(1.0)
-_CUBLAS_BETA_ZERO = ctypes.c_float(0.0)
-_CUBLAS_ALPHA_ONE_PTR = ctypes.byref(_CUBLAS_ALPHA_ONE)
-_CUBLAS_BETA_ZERO_PTR = ctypes.byref(_CUBLAS_BETA_ZERO)
 
 
 def _broadcast_index_expr(t, output_shape, output_size, idx_expr="idx"):
@@ -738,6 +734,8 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
         return None
 
     out_gpu = mempool.alloc(M * N * 4)
+    alpha = ctypes.c_float(1.0)
+    beta = ctypes.c_float(0.0)
     _set_cublas_stream(lib, handle)
     math_mode = _CUBLAS_TF32_TENSOR_OP_MATH if M >= 256 else _CUBLAS_DEFAULT_MATH
     _set_cublas_math_mode(lib, handle, math_mode)
@@ -749,12 +747,12 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
             ctypes.c_int(N),
             ctypes.c_int(M),
             ctypes.c_int(K),
-            _CUBLAS_ALPHA_ONE_PTR,
+            ctypes.byref(alpha),
             ctypes.c_void_p(int(b.gpu_ptr)),
             ctypes.c_int(N),
             ctypes.c_void_p(int(a.gpu_ptr)),
             ctypes.c_int(K),
-            _CUBLAS_BETA_ZERO_PTR,
+            ctypes.byref(beta),
             ctypes.c_void_p(int(out_gpu)),
             ctypes.c_int(N),
         )
@@ -783,6 +781,8 @@ def _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M: int, K: int, N: int
         return None
 
     out_gpu = mempool.alloc(M * N * 4)
+    alpha = ctypes.c_float(1.0)
+    beta = ctypes.c_float(0.0)
     _set_cublas_stream(lib, handle)
     _set_cublas_math_mode(lib, handle, _CUBLAS_TF32_TENSOR_OP_MATH)
     try:
@@ -793,12 +793,12 @@ def _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M: int, K: int, N: int
             ctypes.c_int(N),
             ctypes.c_int(M),
             ctypes.c_int(K),
-            _CUBLAS_ALPHA_ONE_PTR,
+            ctypes.byref(alpha),
             ctypes.c_void_p(int(w.gpu_ptr)),
             ctypes.c_int(N),
             ctypes.c_void_p(int(x.gpu_ptr)),
             ctypes.c_int(K),
-            _CUBLAS_BETA_ZERO_PTR,
+            ctypes.byref(beta),
             ctypes.c_void_p(int(out_gpu)),
             ctypes.c_int(N),
         )
