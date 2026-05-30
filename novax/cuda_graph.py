@@ -24,63 +24,58 @@ class CUDAGraph:
         if self._stream is None:
             raise RuntimeError("CUDA stream is not available for graph capture")
 
-        previous_rect_cublas = getattr(launcher, "_capture_rect_cublas", False)
-        launcher._capture_rect_cublas = True
+        # Warm once so kernels and cuBLAS handles are compiled/initialized before capture.
+        warm_output = fn()
+        cuda.Context.synchronize()
+        del warm_output
+
+        sizes = []
+        original_alloc = mempool.alloc
+
+        def recording_alloc(size):
+            sizes.append(size)
+            return original_alloc(size)
+
+        mempool.alloc = recording_alloc
         try:
-            # Warm once so kernels and cuBLAS handles are compiled/initialized before capture.
-            warm_output = fn()
+            traced_output = fn()
             cuda.Context.synchronize()
-            del warm_output
-
-            sizes = []
-            original_alloc = mempool.alloc
-
-            def recording_alloc(size):
-                sizes.append(size)
-                return original_alloc(size)
-
-            mempool.alloc = recording_alloc
-            try:
-                traced_output = fn()
-                cuda.Context.synchronize()
-                del traced_output
-            finally:
-                mempool.alloc = original_alloc
-
-            self._buffers = [original_alloc(size) for size in sizes]
-            index = 0
-
-            def graph_alloc(size):
-                nonlocal index
-                if index >= len(self._buffers):
-                    raise RuntimeError("Capture allocated more buffers than the warm trace")
-                ptr = self._buffers[index]
-                index += 1
-                return ptr
-
-            stream_handle = ctypes.c_void_p(int(self._stream.handle))
-            mempool.alloc = graph_alloc
-            captured_output = None
-            try:
-                _check(self._cudart.cudaStreamBeginCapture(stream_handle, ctypes.c_int(0)), "cudaStreamBeginCapture")
-                captured_output = fn()
-                _check(self._cudart.cudaStreamEndCapture(stream_handle, ctypes.byref(self._graph)), "cudaStreamEndCapture")
-            except Exception:
-                try:
-                    self._cudart.cudaStreamEndCapture(stream_handle, ctypes.byref(self._graph))
-                except Exception:
-                    pass
-                raise
-            finally:
-                mempool.alloc = original_alloc
-                del captured_output
-
-            if index != len(self._buffers):
-                raise RuntimeError("Capture allocated fewer buffers than the warm trace")
-            _check(self._cudart.cudaGraphInstantiate(ctypes.byref(self._exec), self._graph, ctypes.c_ulonglong(0)),
-                   "cudaGraphInstantiate")
+            del traced_output
         finally:
-            launcher._capture_rect_cublas = previous_rect_cublas
+            mempool.alloc = original_alloc
+
+        self._buffers = [original_alloc(size) for size in sizes]
+        index = 0
+
+        def graph_alloc(size):
+            nonlocal index
+            if index >= len(self._buffers):
+                raise RuntimeError("Capture allocated more buffers than the warm trace")
+            ptr = self._buffers[index]
+            index += 1
+            return ptr
+
+        stream_handle = ctypes.c_void_p(int(self._stream.handle))
+        mempool.alloc = graph_alloc
+        captured_output = None
+        try:
+            _check(self._cudart.cudaStreamBeginCapture(stream_handle, ctypes.c_int(0)), "cudaStreamBeginCapture")
+            captured_output = fn()
+            _check(self._cudart.cudaStreamEndCapture(stream_handle, ctypes.byref(self._graph)), "cudaStreamEndCapture")
+        except Exception:
+            try:
+                self._cudart.cudaStreamEndCapture(stream_handle, ctypes.byref(self._graph))
+            except Exception:
+                pass
+            raise
+        finally:
+            mempool.alloc = original_alloc
+            del captured_output
+
+        if index != len(self._buffers):
+            raise RuntimeError("Capture allocated fewer buffers than the warm trace")
+        _check(self._cudart.cudaGraphInstantiate(ctypes.byref(self._exec), self._graph, ctypes.c_ulonglong(0)),
+               "cudaGraphInstantiate")
 
     def replay(self):
         if not self._exec.value:
