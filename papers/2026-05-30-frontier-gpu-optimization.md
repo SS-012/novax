@@ -289,6 +289,11 @@ Experiment note:
   regressed, with `fused_mm_linear_128_256_128` at 1.38x the saved best. This
   supports the multi-versioning lesson: a vendor-library route that wins at one
   shape can lose at the adjacent smaller shape, so the gate must stay exact.
+- `5dd0e23` kept the scalar exact fused-mm ReLU epilogue but removed its
+  runtime `total` argument and bounds check. Correctness passed, but the run
+  had zero focused improvements and failed the gate. This reinforces the
+  launch-overhead lesson: once the epilogue is a separate tiny launch, trimming
+  one branch inside the kernel is below the meaningful optimization surface.
 
 ## Things Not To Repeat Blindly
 
@@ -321,3 +326,5 @@ Experiment note:
   scalar epilogue was faster under the focused gate.
 - Broadening the zero-bias fused-mm cuBLAS route to `128x256x128`; the original
   single-kernel fused-mm path is faster for that smaller shape.
+- Removing bounds checks from the separate exact fused-mm ReLU epilogue; it did
+  not improve the focused suite.

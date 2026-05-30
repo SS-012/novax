@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 86
+- Logged rows: 87
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 85
-- Unique non-baseline experiment commits: 84
+- Experiment evaluations after baseline: 86
+- Unique non-baseline experiment commits: 85
 - Currently successful unique experiments: 17
 - Strict benchmark-qualified performance successes: 4
-- Currently discarded or reverted unique experiments: 67
+- Currently discarded or reverted unique experiments: 68
 
 Definitions:
 
@@ -277,6 +277,11 @@ focused regressions. The intended smaller fused-mm rows regressed badly:
 `fused_mm_linear_128_256_128` was 1.38x the saved best. Keep the current
 cuBLAS fused-mm gate exact to `256x512x256`; the smaller shape is better served
 by the original single CUDA kernel.
+Experiment `5dd0e23` kept the scalar exact fused-mm ReLU epilogue but removed
+the runtime `total` argument and bounds branch for the exact 65,536-element
+output. Correctness passed, but the benchmark failed with score `-111.518667`,
+0 focused improvements, and 1 focused regression. The kept scalar epilogue with
+the bounds check remains the best verified version.
 
 ## Successful Experiments Kept
 
@@ -373,6 +378,7 @@ These experiments should not be retried in the same form.
 | `e5e58ed` | discard | Fused multiply-add expression lowering failed the focused gate and regressed `fusion_chain5`. |
 | `277a76f` | discard | Vectorized exact fused-mm ReLU epilogue regressed the 256 fused-mm naive row and failed the focused gate. |
 | `2d4e508` | discard | Extending zero-bias fused-mm cuBLAS to `128x256x128` regressed the smaller fused-mm rows. |
+| `5dd0e23` | discard | Exact scalar fused-mm ReLU epilogue without bounds checks produced no focused improvements. |
 
 ## Full Experiment Ledger
 
@@ -464,6 +470,7 @@ These experiments should not be retried in the same form.
 | `7b68fc5` | keep | yes | 3 | 0 | 0 | 430.255136 | 0.584482 | Exact zero-bias 256 fused-mm route through TF32 cuBLAS qualified twice with no focused regressions. |
 | `277a76f` | discard | no | 2 | 1 | 0 | -83.806552 | 0.581182 | Vectorized exact fused-mm ReLU epilogue regressed the 256 fused-mm naive row and failed the focused gate. |
 | `2d4e508` | discard | no | 2 | 3 | 0 | -1249.239515 | 0.611800 | Extending zero-bias fused-mm cuBLAS to `128x256x128` regressed the smaller fused-mm rows. |
+| `5dd0e23` | discard | no | 0 | 1 | 0 | -111.518667 | 0.593527 | Exact scalar fused-mm ReLU epilogue without bounds checks produced no focused improvements. |
 
 ## Future Research Directions
 
