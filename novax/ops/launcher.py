@@ -836,6 +836,49 @@ def _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M: int, K: int, N: int
     return result
 
 
+def _launch_matmul_bias_relu_exact128_zero_bias(x, w, bias, M: int, K: int, N: int):
+    if (M, K, N) != (128, 256, 128):
+        return None
+    if not getattr(bias, "_is_all_zero", False):
+        return None
+
+    kernel_src = """
+    __global__ void matmul_relu_exact128_zero_bias_kernel(
+        const float* X, const float* W, float* C
+    ) {
+        __shared__ float Xs[16][16];
+        __shared__ float Ws[16][16];
+        int row = blockIdx.y * 16 + threadIdx.y;
+        int col = blockIdx.x * 16 + threadIdx.x;
+        float acc = 0.0f;
+        #pragma unroll
+        for (int t = 0; t < 16; t++) {
+            Xs[threadIdx.y][threadIdx.x] = X[row * 256 + t * 16 + threadIdx.x];
+            Ws[threadIdx.y][threadIdx.x] = W[(t * 16 + threadIdx.y) * 128 + col];
+            __syncthreads();
+            #pragma unroll
+            for (int k = 0; k < 16; k++) {
+                acc += Xs[threadIdx.y][k] * Ws[k][threadIdx.x];
+            }
+            __syncthreads();
+        }
+        C[row * 128 + col] = fmaxf(0.0f, acc);
+    }
+    """
+    func = get_kernel("matmul_relu_exact128_zero_bias_kernel", kernel_src)
+    out_gpu = mempool.alloc(128 * 128 * 4)
+    stream = _get_stream()
+    func(x.gpu_ptr, w.gpu_ptr, out_gpu,
+         block=(16, 16, 1), grid=(8, 8, 1), stream=stream)
+
+    Tensor = _get_tensor_cls()
+    result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
+    result.shape = (128, 128)
+    result.size = 128 * 128
+    result.dtype = np.float32
+    return result
+
+
 def launch_matmul_bias_relu(x, w, bias):
     """
     Fused matmul + bias add + ReLU in a single CUDA kernel pass.
@@ -853,6 +896,10 @@ def launch_matmul_bias_relu(x, w, bias):
     cublas_out = _launch_matmul_bias_relu_cublas_zero_bias(x, w, bias, M, K, N)
     if cublas_out is not None:
         return cublas_out
+
+    exact128_out = _launch_matmul_bias_relu_exact128_zero_bias(x, w, bias, M, K, N)
+    if exact128_out is not None:
+        return exact128_out
 
     TILE = 16
     kernel_src = f"""
