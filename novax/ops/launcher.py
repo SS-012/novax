@@ -16,7 +16,6 @@ from novax.utils import mempool
 
 # Cache compiled kernels to avoid recompilation
 _kernel_cache = {}
-_fused_kernel_cache = {}
 # Lazily create streams only after a CUDA context exists; default to None
 _stream = None
 _cublas_lib = None
@@ -330,24 +329,19 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
         raise RuntimeError("GPU not available: cannot launch kernels")
     assert all(t.on_gpu for t in inputs), "All inputs must be on GPU"
     n = inputs[0].size
-    if not all(t.size == n for t in inputs):
-        expr = _apply_broadcast_indices(expr, inputs, inputs[0].shape, n)
+    expr = _apply_broadcast_indices(expr, inputs, inputs[0].shape, n)
     assert expr is not None, "All inputs must be broadcastable to the output shape"
 
-    cache_key = (op_name, expr, len(inputs))
-    func = _fused_kernel_cache.get(cache_key)
-    if func is None:
-        params = ", ".join([f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"])
-        kernel_src = f"""
-        __global__ void {op_name}({params}) {{
-            int idx = threadIdx.x + blockIdx.x * blockDim.x;
-            if (idx < n) {{
-                out[idx] = {expr};
-            }}
+    params = ", ".join([f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"])
+    kernel_src = f"""
+    __global__ void {op_name}({params}) {{
+        int idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx < n) {{
+            out[idx] = {expr};
         }}
-        """
-        func = get_kernel(op_name, kernel_src)
-        _fused_kernel_cache[cache_key] = func
+    }}
+    """
+    func = get_kernel(op_name, kernel_src)
     out_gpu = mempool.alloc(n * 4)
     bs = _optimal_block_size()
     block = (bs, 1, 1)
