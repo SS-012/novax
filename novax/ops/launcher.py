@@ -710,96 +710,6 @@ def _launch_matmul_cublas(a, b, M: int, K: int, N: int):
     return result
 
 
-def _launch_matmul_bias_relu_rect_tile(x, w, bias, M: int, K: int, N: int):
-    if M < 16 or K < 16 or N < 32:
-        return None
-    try:
-        max_threads = cuda.Device(0).get_attribute(cuda.device_attribute.MAX_THREADS_PER_BLOCK)
-        if max_threads < 512:
-            return None
-    except Exception:
-        return None
-
-    BM = 16
-    BN = 32
-    BK = 16
-    kernel_src = f"""
-    #define BM {BM}
-    #define BN {BN}
-    #define BK {BK}
-    __global__ void matmul_bias_relu_rect_tile_kernel(
-        const float* X, const float* W, const float* B, float* C,
-        int M, int K, int N
-    ) {{
-        __shared__ float Xs[BM][BK];
-        __shared__ float Ws[BK][BN];
-
-        int tx = threadIdx.x;
-        int ty = threadIdx.y;
-        int tid = ty * blockDim.x + tx;
-        int row = blockIdx.y * BM + ty;
-        int col = blockIdx.x * BN + tx;
-        float acc = 0.0f;
-
-        for (int tile = 0; tile < (K + BK - 1) / BK; ++tile) {{
-            if (tid < BM * BK) {{
-                int xr = tid / BK;
-                int xk = tid - xr * BK;
-                int g_row = blockIdx.y * BM + xr;
-                int g_k = tile * BK + xk;
-                Xs[xr][xk] = (g_row < M && g_k < K) ? X[g_row * K + g_k] : 0.0f;
-            }}
-
-            int wk = tid / BN;
-            int wc = tid - wk * BN;
-            int g_k = tile * BK + wk;
-            int g_col = blockIdx.x * BN + wc;
-            Ws[wk][wc] = (g_k < K && g_col < N) ? W[g_k * N + g_col] : 0.0f;
-            __syncthreads();
-
-            #pragma unroll
-            for (int kk = 0; kk < BK; ++kk) {{
-                acc += Xs[ty][kk] * Ws[kk][tx];
-            }}
-            __syncthreads();
-        }}
-
-        if (row < M && col < N) {{
-            float val = acc + B[col];
-            C[row * N + col] = fmaxf(0.0f, val);
-        }}
-    }}
-    """
-    out_gpu = None
-    try:
-        func = get_kernel("matmul_bias_relu_rect_tile_kernel", kernel_src)
-        out_gpu = mempool.alloc(M * N * 4)
-        stream = _get_stream()
-        func(
-            x.gpu_ptr,
-            w.gpu_ptr,
-            bias.gpu_ptr,
-            out_gpu,
-            np.int32(M),
-            np.int32(K),
-            np.int32(N),
-            block=(BN, BM, 1),
-            grid=((N + BN - 1) // BN, (M + BM - 1) // BM, 1),
-            stream=stream,
-        )
-    except Exception:
-        if out_gpu is not None:
-            mempool.free(out_gpu, M * N * 4)
-        return None
-
-    Tensor = _get_tensor_cls()
-    result = Tensor(out_gpu, gpu=True, inputs=[x, w, bias])
-    result.shape = (M, N)
-    result.size = M * N
-    result.dtype = np.float32
-    return result
-
-
 def launch_matmul_bias_relu(x, w, bias):
     """
     Fused matmul + bias add + ReLU in a single CUDA kernel pass.
@@ -813,10 +723,6 @@ def launch_matmul_bias_relu(x, w, bias):
     K2, N = w.shape
     assert K == K2, f"Shape mismatch: {x.shape} @ {w.shape}"
     assert bias.size == N, f"Bias size {bias.size} must match output columns {N}"
-
-    rect_out = _launch_matmul_bias_relu_rect_tile(x, w, bias, M, K, N)
-    if rect_out is not None:
-        return rect_out
 
     TILE = 16
     kernel_src = f"""

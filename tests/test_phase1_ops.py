@@ -378,18 +378,6 @@ class TestGPUNewOps:
         result = nx.relu(nx.matmul(x, w) + b).eval()
         np.testing.assert_array_almost_equal(result.to_host(), np.maximum(x_arr @ w_arr + b_arr, 0.0), decimal=5)
 
-    def test_gpu_launch_matmul_bias_relu_rect_tile(self):
-        x_arr = (np.arange(16 * 32, dtype=np.float32).reshape(16, 32) - 200.0) / 100.0
-        w_arr = (np.arange(32 * 32, dtype=np.float32).reshape(32, 32) % 17 - 8.0) / 20.0
-        b_arr = np.linspace(-0.5, 0.5, 32, dtype=np.float32)
-        x = Tensor(x_arr).to_gpu()
-        w = Tensor(w_arr).to_gpu()
-        b = Tensor(b_arr).to_gpu()
-        nx.set_default_device("gpu")
-        result = nx.launch_matmul_bias_relu(x, w, b)
-        expected = np.maximum(x_arr @ w_arr + b_arr, 0.0)
-        np.testing.assert_array_almost_equal(result.to_host(), expected, decimal=4)
-
     def test_gpu_lazy_nested_elementwise_chain(self):
         a_arr = np.linspace(-2.0, 2.0, 64, dtype=np.float32)
         b_arr = a_arr * 0.5
