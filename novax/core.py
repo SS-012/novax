@@ -463,7 +463,6 @@ class Tensor:
             "abs":     "fabsf({e})",
             "neg":     "(-({e}))",
             "relu":    "fmaxf(0.0f, {e})",
-            "sigmoid": "(1.0f / (1.0f + expf(-({e}))))",
             "tanh":    "tanhf({e})",
         }
 
@@ -481,6 +480,12 @@ class Tensor:
                 if sub is None:
                     return None
                 return _unary_cuda[node.op].format(e=sub)
+            if node.op == "sigmoid":
+                sub = build(node.inputs[0])
+                if sub is None:
+                    return None
+                exp_func = "expf" if node.inputs[0].is_leaf else "__expf"
+                return f"(1.0f / (1.0f + {exp_func}(-({sub}))))"
             return None
 
         expr = build(self)
