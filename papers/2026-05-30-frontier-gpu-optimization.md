@@ -48,6 +48,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [Nautilus: An Auto-Scheduling Tensor Compiler for Efficient Tiled GPU Kernels](https://arxiv.org/abs/2604.14825) | A 2026 tensor compiler result shows that expression rewrites, high-level transformations, and tile optimizations need to be searched jointly rather than hand-applied one at a time. | NovaX's next meaningful gains likely need a small IR plus scheduler/autotuner; isolated hand-specialized kernels have repeatedly failed the focused gate. |
 | [GPUOS: A GPU Operating System Primitive for Transparent Operation Fusion](https://arxiv.org/abs/2604.17861) | A 2026 runtime direction for many small tensor ops is to avoid repeated host launches by using persistent GPU-side operation injection. | NovaX's Python overhead ceiling likely needs either larger graph capture regions or a lower-level runtime loop; individual Python-call optimizations are not enough. |
 | [Hybrid JIT-CUDA Graph Optimization for Low-Latency Large Language Model Inference](https://arxiv.org/abs/2604.23467) | High-performance low-latency inference partitions static work into CUDA Graph replay and dynamic work into JIT-compiled kernels, reducing launch overhead and latency variance. | NovaX should keep pushing static graph replay, but pure Python replay loops are unlikely to be enough; the replay loop needs to move lower than Python or be amortized by larger captured regions. |
+| [Foundry: Template-Based CUDA Graph Context Materialization for Fast LLM Serving Cold Start](https://arxiv.org/abs/2604.06664) | CUDA Graphs are coupled to execution context, including device addresses and lazily loaded kernels; Foundry reduces online reconstruction cost by persisting graph topology plus context templates. | NovaX graph capture should treat memory layout and kernel warmup as first-class state. Replaying static regions is valuable, but capture-safe deterministic allocation matters as much as the replay API. |
 | [Boosting Performance of Iterative Applications on GPUs: Kernel Batching with CUDA Graphs](https://arxiv.org/abs/2501.09398) | Iterative launch-bound applications can batch multiple iterations by unrolling them into one CUDA Graph, reducing per-iteration launch overhead. | A `capture_many` style API is plausible for repeated fixed-shape NovaX workloads, but the benchmark gate needs stable evidence that only the intended graph path changes. |
 | [FuseFlow: A Fusion-Centric Compilation Framework](https://weiya711.github.io/publications/asplos2026fuseflow.pdf) | Fusion schedules can be limited by over-fusion and under-fusion; profitable fusion depends on ordering and dataflow, not just combining adjacent operators. | NovaX's direct expression fusion is useful, but future wins need fusion planning around data movement and scheduling rather than more front-end string-building shortcuts. |
 
@@ -278,6 +279,11 @@ Experiment note:
   on confirmation. This supports the CODA/NVIDIA epilogue lesson with a caveat:
   even a separate epilogue can win when the shape gate is narrow and the naive
   FP32 tile is the real bottleneck.
+- `277a76f` vectorized the kept exact fused-mm in-place ReLU epilogue with
+  `float4` loads/stores. Correctness passed, but `fused_mm_naive_256_512_256`
+  regressed by 1.13x and the focused gate failed. This supports the CODA and
+  hardware-feedback lesson: after the GEMM route is fixed, the epilogue launch
+  dominates enough that local vectorization can be neutral or harmful.
 
 ## Things Not To Repeat Blindly
 
@@ -306,3 +312,5 @@ Experiment note:
   16x16 one-output-per-thread tile is occupancy- or synchronization-limited.
 - Explicit `fmaf` expression lowering for fusion chains; NVCC likely already
   contracts the multiply-add where profitable.
+- Vectorizing the separate ReLU epilogue on the exact 256 fused-mm path; the
+  scalar epilogue was faster under the focused gate.

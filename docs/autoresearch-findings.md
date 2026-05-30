@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 84
+- Logged rows: 85
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 83
-- Unique non-baseline experiment commits: 82
+- Experiment evaluations after baseline: 84
+- Unique non-baseline experiment commits: 83
 - Currently successful unique experiments: 17
 - Strict benchmark-qualified performance successes: 4
-- Currently discarded or reverted unique experiments: 65
+- Currently discarded or reverted unique experiments: 66
 
 Definitions:
 
@@ -264,6 +264,12 @@ regressions; the confirmation benchmark also qualified with score `882.410648`,
 again with 3 focused improvements and 0 focused regressions. The best repeated
 win was `fused_mm_linear_256_512_256`, which improved by 1.22x on the primary
 run and 1.51x on confirmation.
+Experiment `277a76f` tried to tighten the kept exact zero-bias fused-mm path by
+vectorizing its in-place ReLU epilogue over `float4` values and removing the
+runtime bounds check. Correctness passed, but the benchmark failed with score
+`-83.806552`, 2 focused improvements, and 1 focused regression. The regression
+was the target-adjacent `fused_mm_naive_256_512_256` row at 1.13x the saved
+baseline time, so the simpler scalar epilogue remains the better kept version.
 
 ## Successful Experiments Kept
 
@@ -358,6 +364,7 @@ These experiments should not be retried in the same form.
 | `5eb4d27` | discard | Smaller fused-transcendental blocks failed twice and regressed fusion-chain guardrails. |
 | `54cd5f4` | discard | Row-coarsened exact 64x64 matmul regressed the target small-matmul path and failed the focused gate. |
 | `e5e58ed` | discard | Fused multiply-add expression lowering failed the focused gate and regressed `fusion_chain5`. |
+| `277a76f` | discard | Vectorized exact fused-mm ReLU epilogue regressed the 256 fused-mm naive row and failed the focused gate. |
 
 ## Full Experiment Ledger
 
@@ -447,6 +454,7 @@ These experiments should not be retried in the same form.
 | `54cd5f4` | discard | no | 3 | 3 | 0 | -1372.581309 | 0.642395 | Row-coarsened exact 64x64 matmul regressed the target small-matmul path and failed the focused gate. |
 | `e5e58ed` | discard | no | 1 | 6 | 0 | -1254.545042 | 0.602699 | Fused multiply-add expression lowering failed the focused gate and regressed `fusion_chain5`. |
 | `7b68fc5` | keep | yes | 3 | 0 | 0 | 430.255136 | 0.584482 | Exact zero-bias 256 fused-mm route through TF32 cuBLAS qualified twice with no focused regressions. |
+| `277a76f` | discard | no | 2 | 1 | 0 | -83.806552 | 0.581182 | Vectorized exact fused-mm ReLU epilogue regressed the 256 fused-mm naive row and failed the focused gate. |
 
 ## Future Research Directions
 
