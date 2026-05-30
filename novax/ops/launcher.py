@@ -329,7 +329,8 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
         raise RuntimeError("GPU not available: cannot launch kernels")
     assert all(t.on_gpu for t in inputs), "All inputs must be on GPU"
     n = inputs[0].size
-    expr = _apply_broadcast_indices(expr, inputs, inputs[0].shape, n)
+    if not all(t.size == n for t in inputs):
+        expr = _apply_broadcast_indices(expr, inputs, inputs[0].shape, n)
     assert expr is not None, "All inputs must be broadcastable to the output shape"
 
     params = ", ".join([f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"])
