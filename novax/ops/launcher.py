@@ -333,7 +333,24 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
     assert expr is not None, "All inputs must be broadcastable to the output shape"
 
     params = ", ".join([f"const float* x{i}" for i in range(len(inputs))] + ["float* out", "int n"])
-    kernel_src = f"""
+    coarsen4 = n >= 1_000_000 and n % 4 == 0 and all(t.size == n for t in inputs)
+    if coarsen4:
+        kernel_name = f"{op_name}_coarsen4"
+        kernel_src = f"""
+    __global__ void {kernel_name}({params}) {{
+        int base = (threadIdx.x + blockIdx.x * blockDim.x) * 4;
+        if (base < n) {{
+            #pragma unroll
+            for (int offset = 0; offset < 4; offset++) {{
+                int idx = base + offset;
+                out[idx] = {expr};
+            }}
+        }}
+    }}
+    """
+        func = get_kernel(kernel_name, kernel_src)
+    else:
+        kernel_src = f"""
     __global__ void {op_name}({params}) {{
         int idx = threadIdx.x + blockIdx.x * blockDim.x;
         if (idx < n) {{
@@ -341,11 +358,12 @@ def launch_fused(inputs, expr: str, op_name: str = "fused_kernel"):
         }}
     }}
     """
-    func = get_kernel(op_name, kernel_src)
+        func = get_kernel(op_name, kernel_src)
     out_gpu = mempool.alloc(n * 4)
     bs = _optimal_block_size()
     block = (bs, 1, 1)
-    grid = ((n + bs - 1) // bs, 1, 1)
+    work_items = n // 4 if coarsen4 else n
+    grid = ((work_items + bs - 1) // bs, 1, 1)
 
     args = [t.gpu_ptr for t in inputs] + [out_gpu, np.int32(n)]
     stream = _get_stream()
