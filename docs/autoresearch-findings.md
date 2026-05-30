@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 66
+- Logged rows: 67
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 65
-- Unique non-baseline experiment commits: 64
+- Experiment evaluations after baseline: 66
+- Unique non-baseline experiment commits: 65
 - Currently successful unique experiments: 14
 - Strict benchmark-qualified performance successes: 1
-- Currently discarded or reverted unique experiments: 50
+- Currently discarded or reverted unique experiments: 51
 
 Definitions:
 
@@ -141,6 +141,10 @@ Experiment `1086ca8` specialized the two focused fusion-chain expressions into
 fixed CUDA kernels. It failed to improve the intended fusion targets enough and
 missed the focused gate, so the existing generic fused-expression path remains
 the better implementation for those chains.
+Experiment `77ed4e7` added a batched `CUDAGraph.replay_many()` API and routed
+the captured-inference benchmark through it. The run failed the focused score
+and captured inference was slower than the saved best, so Python-level replay
+batching is not enough to improve the graph path.
 
 ## Successful Experiments Kept
 
@@ -217,6 +221,7 @@ These experiments should not be retried in the same form.
 | `c830f9a` | discard | Prepared PyCUDA launches produced no focused improvements and regressed fusion, capture, and matmul cases. |
 | `1b04e93` | discard | cuBLASLt fused bias+ReLU epilogue improved the 256 fused-mm cases and capture but regressed too many focused cases. |
 | `1086ca8` | discard | Specialized fixed kernels for the focused fusion chains did not improve fusion enough and failed the focused gate. |
+| `77ed4e7` | discard | Batched CUDA graph replay in Python did not improve captured inference and failed the focused score gate. |
 
 ## Full Experiment Ledger
 
@@ -288,6 +293,7 @@ These experiments should not be retried in the same form.
 | `c830f9a` | discard | no | 0 | 6 | 0 | -1324.696890 | 0.701902 | Prepared elementwise launches produced no focused improvements and regressed fusion capture and matmul cases. |
 | `1b04e93` | discard | no | 3 | 7 | 0 | -1642.789714 | 0.670079 | cuBLASLt fused bias relu epilogue improved 256 fused-mm and capture but regressed too many focused cases. |
 | `1086ca8` | discard | no | 2 | 3 | 0 | -826.233543 | 0.706146 | Specialized focused fusion-chain kernels did not improve fusion enough and failed focused gate. |
+| `77ed4e7` | discard | no | 2 | 2 | 0 | -192.839153 | 0.696145 | Batched cuda graph replay API did not improve capture and failed focused research score. |
 
 ## Future Research Directions
 
