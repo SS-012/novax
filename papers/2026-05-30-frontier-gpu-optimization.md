@@ -241,6 +241,11 @@ Experiment note:
   useful counterexample to failed fused-mm exact tiling: the successful case
   only touched one benchmark shape and removed both bounds checks and runtime
   shape parameters from a small hand-written GEMM path.
+- `c7f15d8` tried to shave Python-side dispatch overhead from the kept 64x64
+  path by checking it before the cuBLAS gate. The target row improved twice,
+  but the focused suite failed twice on unrelated noise. This reinforces that
+  small launch-dispatch cleanups are below the noise floor unless the full gate
+  stays green.
 
 ## Things Not To Repeat Blindly
 
@@ -259,3 +264,5 @@ Experiment note:
 - CUDA graph replay micro-tweaks unless captured inference itself improves.
 - Direct fused-expression builder shortcuts unless the full focused gate stays
   green across confirmation runs.
+- Shape-specific dispatch micro-tweaks unless they qualify, even when the target
+  row itself improves.

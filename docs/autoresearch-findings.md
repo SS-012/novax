@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 78
+- Logged rows: 79
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 77
-- Unique non-baseline experiment commits: 76
+- Experiment evaluations after baseline: 78
+- Unique non-baseline experiment commits: 77
 - Currently successful unique experiments: 16
 - Strict benchmark-qualified performance successes: 3
-- Currently discarded or reverted unique experiments: 60
+- Currently discarded or reverted unique experiments: 61
 
 Definitions:
 
@@ -222,6 +222,12 @@ cases faster than PyTorch. A later tiebreaker compared against the newly saved
 candidate artifact rather than the old baseline; it failed the stricter score
 but still showed `matmul_64x64_x_64x64` at 1.14x faster than the candidate-best
 run, so the code change was kept while the noise caveat was recorded.
+Experiment `c7f15d8` moved the exact 64x64 matmul dispatch ahead of the cuBLAS
+gate and removed runtime shape arguments from the helper. It improved
+`matmul_64x64_x_64x64` on both benchmark runs, but both runs failed the focused
+gate due unrelated regressions, including a large noisy `matmul_256` regression
+on confirmation. The micro-dispatch change was reverted because the current
+gate requires full focused-suite safety, not only a target-case win.
 
 ## Successful Experiments Kept
 
@@ -310,6 +316,7 @@ These experiments should not be retried in the same form.
 | `29a37e2` | discard | Zero-bias fused matmul specialization produced no focused improvements and regressed focused cases. |
 | `4a31903` | discard | Direct fused-expression build improved `fusion_chain5` twice but failed the focused gate on both runs. |
 | `53d31b8` | discard | Exact-tile fused matmul removed boundary checks but failed to improve fused-mm enough and missed the focused gate. |
+| `c7f15d8` | discard | Dispatching exact 64 matmul before cuBLAS improved 64x64 twice but failed the focused gate twice. |
 
 ## Full Experiment Ledger
 
@@ -393,6 +400,7 @@ These experiments should not be retried in the same form.
 | `4a31903` | discard | no | 2 | 2 | 0 | -183.428112 | 0.612141 | Direct fused-expression build improved fusion_chain5 twice but failed the focused gate on both runs. |
 | `53d31b8` | discard | no | 1 | 3 | 0 | -439.568890 | 0.622602 | Exact-tile fused matmul removed boundary checks but failed to improve fused-mm enough and missed the focused gate. |
 | `d610a5c` | keep | yes | 3 | 2 | 0 | 213.689073 | 0.615337 | Exact 64x64 matmul specialization qualified twice and improved the focused small-matmul path. |
+| `c7f15d8` | discard | no | 2 | 3 | 0 | -971.796502 | 0.638130 | Dispatch exact 64 matmul before cuBLAS improved 64x64 twice but failed the focused gate twice. |
 
 ## Future Research Directions
 
