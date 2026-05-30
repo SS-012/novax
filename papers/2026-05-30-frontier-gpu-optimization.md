@@ -318,6 +318,11 @@ Experiment note:
   and regressed `matmul_64x64_x_64x64`. This reinforces the profiling lesson:
   block-size tuning should be explicit autotuning with repeated measurements,
   not another static rule.
+- `a4120d8` coarsened large same-size fused elementwise kernels so each thread
+  produced four adjacent outputs. Correctness passed, but both fusion-chain
+  rows regressed and `fusion_chain3_n1000000` lost to PyTorch. This supports
+  the FuseFlow/Nautilus lesson: profitable fusion is a scheduling/dataflow
+  problem, not a simple thread-count reduction.
 - `ff3a8ac` validated that exact cuBLASLt ReLU epilogues can run correctly in
   NovaX, but its confirmation benchmark failed despite a primary qualification.
   The new lesson is not "avoid cuBLASLt"; it is "do not put cuBLASLt descriptor
@@ -363,6 +368,8 @@ Experiment note:
   not improve the focused suite.
 - Static 256-thread block selection for ReLU-only fused expressions without an
   autotune loop or profiler evidence.
+- Coarsening fused elementwise kernels by having each thread compute four
+  outputs without a scheduler/autotune signal.
 - Python/ctypes cuBLASLt epilogue setup in the hot fused-mm path without a
   persistent lower-level plan cache or generated kernel.
 - One-warp-per-output-tile WMMA fused-mm kernels without shared-memory staging,

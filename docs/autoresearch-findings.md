@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 90
+- Logged rows: 91
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 89
-- Unique non-baseline experiment commits: 88
+- Experiment evaluations after baseline: 90
+- Unique non-baseline experiment commits: 89
 - Currently successful unique experiments: 17
 - Strict benchmark-qualified performance successes: 4
-- Currently discarded or reverted unique experiments: 71
+- Currently discarded or reverted unique experiments: 72
 
 Definitions:
 
@@ -298,6 +298,12 @@ failed with score `-4.118719`: `fused_mm_naive_256_512_256` improved by about
 1.08x, but the change did not beat the kept cuBLAS path enough to clear the
 focused score gate. A naive one-warp-per-16x16 WMMA tile is not a sufficient
 CUTLASS substitute.
+Experiment `a4120d8` coarsened large same-size fused elementwise kernels so
+each thread computed four adjacent outputs. Correctness passed, but the
+benchmark failed with score `-1813.882196`; both fusion-chain rows regressed,
+and `fusion_chain3_n1000000` became slower than PyTorch. The current fused
+elementwise edge depends on occupancy and compiler scheduling more than on
+simply reducing thread count.
 Experiment `81fe1de` used 256-thread blocks only for ReLU-only fused
 elementwise expressions, leaving `expf`/`tanhf` chains on the current block
 choice. Correctness passed, but the benchmark failed with score `-124.063579`,
@@ -404,6 +410,7 @@ These experiments should not be retried in the same form.
 | `81fe1de` | discard | 256-thread blocks for ReLU-only fused expressions failed the focused gate and regressed `matmul_64`. |
 | `ff3a8ac` | discard | Exact cuBLASLt ReLU epilogue qualified once but failed confirmation with fusion-chain regressions. |
 | `7c5ff68` | discard | Exact TF32 WMMA fused-mm ReLU kernel produced a small target win but missed the focused score gate. |
+| `a4120d8` | discard | Coarsening large fused elementwise kernels regressed both fusion-chain rows. |
 
 ## Full Experiment Ledger
 
@@ -499,6 +506,7 @@ These experiments should not be retried in the same form.
 | `81fe1de` | discard | no | 2 | 1 | 0 | -124.063579 | 0.592871 | 256-thread blocks for ReLU-only fused expressions failed the focused gate and regressed `matmul_64`. |
 | `ff3a8ac` | discard | no | 4 | 5 | 0 | -1353.747557 | 0.577248 | Exact cuBLASLt ReLU epilogue qualified once but failed confirmation with fusion-chain regressions. |
 | `7c5ff68` | discard | no | 2 | 1 | 0 | -4.118719 | 0.585784 | Exact TF32 WMMA fused-mm ReLU kernel produced a small target win but missed the focused score gate. |
+| `a4120d8` | discard | no | 2 | 4 | 0 | -1813.882196 | 0.645422 | Coarsening large fused elementwise kernels regressed both fusion-chain rows. |
 
 ## Future Research Directions
 
