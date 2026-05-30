@@ -25,6 +25,7 @@ elementwise or activation case. Keep those cases as guardrails.
 | [ThunderKittens: Simple, Fast, and Adorable AI Kernels](https://arxiv.org/abs/2410.20399) | A small tile abstraction stack can match or beat expert kernels across AI operations by mapping cleanly to warp, block, and grid levels. | NovaX should consider a tiny internal tile-kernel layer for hot fused kernels instead of growing many unrelated ad hoc CUDA strings. |
 | [Optimal Kernel Orchestration for Tensor Programs with Korch](https://arxiv.org/pdf/2406.09465) | Operator-level fusion is often too coarse. Decomposing operators into primitives and optimizing kernel orchestration can find strategies outside manual fusion rules. | NovaX's lazy graph should eventually lower to primitive graphs, not only expression strings. This is relevant to softmax, reductions, and matmul epilogues. |
 | [FlashInfer: Efficient and Customizable Attention Engine for LLM Inference Serving](https://arxiv.org/abs/2501.01005) | High-performance serving combines JIT-specialized templates, memory-layout choices, load-balanced scheduling, and compatibility with CUDA Graph static requirements. | NovaX should make graph-captured static workloads first-class: fixed-shape graph keys, capture-safe memory reuse, and explicit replay APIs. |
+| [PyGraph: Robust Compiler Support for CUDA Graphs in PyTorch](https://arxiv.org/abs/2503.19779) | CUDA Graph gains become robust when capture is integrated into the compiler/runtime rather than exposed only as manual user code. | NovaX should treat graph capture as a runtime lowering path with shape keys, stable allocation, and compiler-like guards, not just a convenience wrapper. |
 | [KernelBench: Can LLMs Write Efficient GPU Kernels?](https://arxiv.org/abs/2502.10517) | LLM-generated kernels need correctness checks, execution feedback, and profiling feedback. Even frontier methods match PyTorch in fewer than 20 percent of cases without strong iteration. | Autoresearch should not trust plausible kernel edits. Every hypothesis needs tests, benchmark comparison, and preferably profiling evidence. |
 | [AutoKernel: Autonomous GPU Kernel Optimization via Iterative Agent-Driven Search](https://arxiv.org/abs/2603.21331) | A 2026 autonomous kernel loop profiles a model, ranks bottlenecks by Amdahl impact, then validates candidates through smoke tests, shape sweeps, numerical checks, determinism checks, and edge cases before recording speedups. | NovaX's loop should keep the current correctness-plus-benchmark gate, but add bottleneck ranking/profiling notes so experiments attack the cases that dominate focused geomean. |
 | [CudaForge: An Agent Framework with Hardware Feedback for CUDA Kernel Optimization](https://arxiv.org/abs/2511.01884) | The agent loop explicitly combines candidate generation, correctness checks, hardware feedback such as Nsight Compute metrics, and repeated improvement. | NovaX should start attaching profiler counters to repeated failures around fused-mm and exact small GEMM; static edits are not enough once the target is near the noise floor. |
@@ -168,6 +169,14 @@ Experiment note:
   lesson: the next serious fused-mm attempt needs a true GEMM epilogue while
   accumulator tiles are still hot, likely via cuBLASLt/CUTLASS-style epilogues
   with cached descriptors, not a separate launch.
+- `ff3a8ac` narrowed cuBLASLt to an exact zero-bias `RELU` epilogue for
+  `256x512x256`, avoiding the broader `RELU_BIAS` shape surface from
+  `1b04e93`. The path was technically valid and qualified once, but failed
+  confirmation with five focused regressions, including fusion-chain
+  regressions. CODA remains the right direction, but a Python/ctypes cuBLASLt
+  descriptor path is still too noisy; future epilogue work should use a
+  persistent lower-level wrapper, a generated CUTLASS-style kernel, or an
+  explicit plan cache outside the benchmark hot loop.
 
 ### H4: GPU-resident MLP backward, gated narrowly
 
@@ -199,6 +208,9 @@ Expected mechanism:
 
 Experiment note:
 
+- PyGraph reinforces that the durable CUDA Graph frontier is compiler/runtime
+  integration. NovaX's graph wins should move toward shape-guarded lowering and
+  capture-safe memory planning instead of Python replay conveniences alone.
 - `c830f9a` retested prepared PyCUDA calls as a launch-overhead reduction.
   Focused benchmark result: 0 improvements, 6 regressions. This reinforces that
   launch-wrapper micro-optimizations are not enough; future work needs profiling
@@ -299,6 +311,11 @@ Experiment note:
   and regressed `matmul_64x64_x_64x64`. This reinforces the profiling lesson:
   block-size tuning should be explicit autotuning with repeated measurements,
   not another static rule.
+- `ff3a8ac` validated that exact cuBLASLt ReLU epilogues can run correctly in
+  NovaX, but its confirmation benchmark failed despite a primary qualification.
+  The new lesson is not "avoid cuBLASLt"; it is "do not put cuBLASLt descriptor
+  and heuristic plumbing in the Python hot path and expect stable focused-suite
+  wins."
 
 ## Things Not To Repeat Blindly
 
@@ -335,3 +352,5 @@ Experiment note:
   not improve the focused suite.
 - Static 256-thread block selection for ReLU-only fused expressions without an
   autotune loop or profiler evidence.
+- Python/ctypes cuBLASLt epilogue setup in the hot fused-mm path without a
+  persistent lower-level plan cache or generated kernel.

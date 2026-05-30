@@ -5,13 +5,13 @@ This document summarizes the NovaX GPU optimization research logged in
 
 ## Count Summary
 
-- Logged rows: 88
+- Logged rows: 89
 - Baseline setup rows: 1
-- Experiment evaluations after baseline: 87
-- Unique non-baseline experiment commits: 86
+- Experiment evaluations after baseline: 88
+- Unique non-baseline experiment commits: 87
 - Currently successful unique experiments: 17
 - Strict benchmark-qualified performance successes: 4
-- Currently discarded or reverted unique experiments: 69
+- Currently discarded or reverted unique experiments: 70
 
 Definitions:
 
@@ -282,6 +282,14 @@ the runtime `total` argument and bounds branch for the exact 65,536-element
 output. Correctness passed, but the benchmark failed with score `-111.518667`,
 0 focused improvements, and 1 focused regression. The kept scalar epilogue with
 the bounds check remains the best verified version.
+Experiment `ff3a8ac` tried the more principled version: a true cuBLASLt ReLU
+epilogue for the exact zero-bias `256x512x256` fused-mm shape. Correctness and
+a direct path probe passed, and the primary benchmark qualified with score
+`119.153908`, but confirmation failed with score `-1353.747557`, 4 focused
+improvements, and 5 focused regressions. The important lesson is that cuBLASLt
+epilogues are viable technically, but in this Python/ctypes benchmark surface
+the descriptor/plan path is too noisy unless it is isolated behind a more
+persistent lower-level wrapper or moved into a CUTLASS-style generated kernel.
 Experiment `81fe1de` used 256-thread blocks only for ReLU-only fused
 elementwise expressions, leaving `expf`/`tanhf` chains on the current block
 choice. Correctness passed, but the benchmark failed with score `-124.063579`,
@@ -386,6 +394,7 @@ These experiments should not be retried in the same form.
 | `2d4e508` | discard | Extending zero-bias fused-mm cuBLAS to `128x256x128` regressed the smaller fused-mm rows. |
 | `5dd0e23` | discard | Exact scalar fused-mm ReLU epilogue without bounds checks produced no focused improvements. |
 | `81fe1de` | discard | 256-thread blocks for ReLU-only fused expressions failed the focused gate and regressed `matmul_64`. |
+| `ff3a8ac` | discard | Exact cuBLASLt ReLU epilogue qualified once but failed confirmation with fusion-chain regressions. |
 
 ## Full Experiment Ledger
 
@@ -479,6 +488,7 @@ These experiments should not be retried in the same form.
 | `2d4e508` | discard | no | 2 | 3 | 0 | -1249.239515 | 0.611800 | Extending zero-bias fused-mm cuBLAS to `128x256x128` regressed the smaller fused-mm rows. |
 | `5dd0e23` | discard | no | 0 | 1 | 0 | -111.518667 | 0.593527 | Exact scalar fused-mm ReLU epilogue without bounds checks produced no focused improvements. |
 | `81fe1de` | discard | no | 2 | 1 | 0 | -124.063579 | 0.592871 | 256-thread blocks for ReLU-only fused expressions failed the focused gate and regressed `matmul_64`. |
+| `ff3a8ac` | discard | no | 4 | 5 | 0 | -1353.747557 | 0.577248 | Exact cuBLASLt ReLU epilogue qualified once but failed confirmation with fusion-chain regressions. |
 
 ## Future Research Directions
 
